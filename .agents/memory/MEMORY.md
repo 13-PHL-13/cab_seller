@@ -1,0 +1,1 @@
+- [Marketplace data scope](seller-marketplace-scope.md) — keep orders distinct from completed purchases, and keep API credentials user-scoped and server-encrypted.

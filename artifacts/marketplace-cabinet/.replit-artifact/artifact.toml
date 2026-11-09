@@ -1,0 +1,28 @@
+kind = "web"
+previewPath = "/"
+title = "Кабинет продавца"
+description = "Единый кабинет аналитики продавца для Ozon и Wildberries с объединённой сводкой продаж, воронками и настройками API-подключений."
+version = "1.0.0"
+id = "artifacts/marketplace-cabinet"
+router = "path"
+
+[[services]]
+name = "web"
+paths = [ "/" ]
+localPort = 24514
+
+[services.development]
+run = "pnpm --filter @workspace/marketplace-cabinet run dev"
+
+[services.production]
+build = [ "pnpm", "--filter", "@workspace/marketplace-cabinet", "run", "build" ]
+serve = "static"
+publicDir = "artifacts/marketplace-cabinet/dist/public"
+
+[[services.production.rewrites]]
+from = "/*"
+to = "/index.html"
+
+[services.env]
+PORT = "24514"
+BASE_PATH = "/"

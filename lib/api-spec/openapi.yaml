@@ -3,13 +3,15 @@ info:
   # Do not change the title, if the title changes, the import paths will be broken
   title: Api
   version: 0.1.0
-  description: API specification
+  description: Seller analytics and marketplace connection API
 servers:
   - url: /api
     description: Base API path
 tags:
   - name: health
     description: Health operations
+  - name: marketplace
+    description: Seller analytics and marketplace connections
 paths:
   /healthz:
     get:
@@ -24,6 +26,120 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/HealthStatus"
+  /marketplace/dashboard:
+    get:
+      operationId: getMarketplaceDashboard
+      tags: [marketplace]
+      summary: Get combined seller dashboard
+      parameters:
+        - name: period
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [7d, 30d, 90d]
+            default: 7d
+        - name: marketplace
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [all, ozon, wildberries]
+            default: all
+      responses:
+        "200":
+          description: Sales summary, daily trend and marketplace funnels
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MarketplaceDashboard"
+        "401":
+          description: Authentication required
+  /marketplace/connections:
+    get:
+      operationId: listMarketplaceConnections
+      tags: [marketplace]
+      summary: List marketplace connection statuses
+      responses:
+        "200":
+          description: Marketplace connection statuses without credentials
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/MarketplaceConnection"
+        "401":
+          description: Authentication required
+  /marketplace/connections/ozon:
+    post:
+      operationId: connectOzon
+      tags: [marketplace]
+      summary: Verify and save Ozon Seller API credentials
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/OzonCredentialsInput"
+      responses:
+        "200":
+          description: Credentials verified and saved
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MarketplaceConnection"
+        "400":
+          description: Credentials were rejected or invalid
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Authentication required
+  /marketplace/connections/wildberries:
+    post:
+      operationId: connectWildberries
+      tags: [marketplace]
+      summary: Verify and save Wildberries API credentials
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/WildberriesCredentialsInput"
+      responses:
+        "200":
+          description: Credentials verified and saved
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MarketplaceConnection"
+        "400":
+          description: Credentials were rejected or invalid
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "401":
+          description: Authentication required
+  /marketplace/connections/{marketplace}:
+    delete:
+      operationId: disconnectMarketplace
+      tags: [marketplace]
+      summary: Remove a marketplace connection
+      parameters:
+        - name: marketplace
+          in: path
+          required: true
+          schema:
+            type: string
+            enum: [ozon, wildberries]
+      responses:
+        "204":
+          description: Connection removed
+        "401":
+          description: Authentication required
 components:
   schemas:
     HealthStatus:
@@ -33,4 +149,124 @@ components:
           type: string
       required:
         - status
-
+    Error:
+      type: object
+      properties:
+        error:
+          type: string
+      required: [error]
+    OzonCredentialsInput:
+      type: object
+      properties:
+        clientId:
+          type: string
+          minLength: 1
+        apiKey:
+          type: string
+          minLength: 1
+      required: [clientId, apiKey]
+    WildberriesCredentialsInput:
+      type: object
+      properties:
+        apiKey:
+          type: string
+          minLength: 1
+      required: [apiKey]
+    MarketplaceConnection:
+      type: object
+      properties:
+        marketplace:
+          type: string
+          enum: [ozon, wildberries]
+        connected:
+          type: boolean
+        storeName:
+          type: ["string", "null"]
+        lastSyncAt:
+          type: ["string", "null"]
+        statusMessage:
+          type: ["string", "null"]
+      required: [marketplace, connected, storeName, lastSyncAt, statusMessage]
+    DailySalesPoint:
+      type: object
+      properties:
+        date:
+          type: string
+        ozonRevenue:
+          type: number
+        wildberriesRevenue:
+          type: number
+        totalRevenue:
+          type: number
+      required: [date, ozonRevenue, wildberriesRevenue, totalRevenue]
+    FunnelMetrics:
+      type: object
+      properties:
+        marketplace:
+          type: string
+          enum: [ozon, wildberries]
+        views:
+          type: integer
+        cartAdds:
+          type: integer
+        orders:
+          type: integer
+        purchases:
+          type: integer
+        viewToCartPercent:
+          type: number
+        cartToOrderPercent:
+          type: number
+        orderToPurchasePercent:
+          type: number
+      required:
+        - marketplace
+        - views
+        - cartAdds
+        - orders
+        - purchases
+        - viewToCartPercent
+        - cartToOrderPercent
+        - orderToPurchasePercent
+    MarketplaceDashboard:
+      type: object
+      properties:
+        period:
+          type: string
+          enum: [7d, 30d, 90d]
+        marketplace:
+          type: string
+          enum: [all, ozon, wildberries]
+        revenue:
+          type: number
+        revenueChangePercent:
+          type: ["number", "null"]
+        orders:
+          type: integer
+        units:
+          type: integer
+        averageOrderValue:
+          type: number
+        salesSeries:
+          type: array
+          items:
+            $ref: "#/components/schemas/DailySalesPoint"
+        funnels:
+          type: array
+          items:
+            $ref: "#/components/schemas/FunnelMetrics"
+        partialErrors:
+          type: array
+          items:
+            type: string
+      required:
+        - period
+        - marketplace
+        - revenue
+        - revenueChangePercent
+        - orders
+        - units
+        - averageOrderValue
+        - salesSeries
+        - funnels
+        - partialErrors
