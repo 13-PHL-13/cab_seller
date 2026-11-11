@@ -1,45 +1,45 @@
-# [Project name]
+# Навигатор продаж
 
-_Replace the heading above with the project's name, and this line with one sentence describing what this app does for users._
+Единый кабинет продавца маркетплейсов: дашборд, аналитика Ozon и Wildberries,
+воронка продаж, финансы и настройки API-подключений.
 
 ## Run & Operate
 
-- `pnpm --filter @workspace/api-server run dev` — run the API server (port 5000)
-- `pnpm run typecheck` — full typecheck across all packages
-- `pnpm run build` — typecheck + build all packages
-- `pnpm --filter @workspace/api-spec run codegen` — regenerate API hooks and Zod schemas from the OpenAPI spec
-- `pnpm --filter @workspace/db run push` — push DB schema changes (dev only)
-- Required env: `DATABASE_URL` — Postgres connection string
+- `cd artifacts/marketplace-cabinet && npm run dev` — dev-сервер (порт 3000)
+- `cd artifacts/marketplace-cabinet && npm run build` — production-сборка (dist/public)
+- `cd artifacts/marketplace-cabinet && npm run typecheck` — проверка типов
+- Деплой на Replit: `pnpm run build` в корне (workspace-скрипты)
 
 ## Stack
 
-- pnpm workspaces, Node.js 24, TypeScript 5.9
-- API: Express 5
-- DB: PostgreSQL + Drizzle ORM
-- Validation: Zod (`zod/v4`), `drizzle-zod`
-- API codegen: Orval (from OpenAPI spec)
-- Build: esbuild (CJS bundle)
+- Vite 7 + React 19 + TypeScript 5.9
+- Графики: recharts
+- Роутинг: wouter
+- Иконки: lucide-react
+- Стили: Tailwind CSS 4 + кастомная дизайн-система в `src/index.css`
 
 ## Where things live
 
-_Populate as you build — short repo map plus pointers to the source-of-truth file for DB schema, API contracts, theme files, etc._
+- `artifacts/marketplace-cabinet/src/App.tsx` — каркас (сайдбар + роуты)
+- `src/pages/` — Дашборд, Маркетплейсы (+ детальная), Воронка, Аналитика, Финансы, Настройки
+- `src/data/mock.ts` — слой данных: детерминированные демо-данные (120 дней по площадкам,
+  воронка, заказы, товары, финансы). При подключении реальных API Ozon/WB
+  функции заменяются на загрузку с сервера, структуры сохраняются.
+- `src/data/settings.ts` — API-подключения/профиль/уведомления (localStorage)
+- `src/components/Logo.tsx` — SVG-логотип «Навигатор продаж»
 
 ## Architecture decisions
 
-_Populate as you build — non-obvious choices a reader couldn't infer from the code (3-5 bullets)._
+- Приложение самодостаточно (без Clerk/Replit-плагинов и внешнего API-сервера) —
+  запускается локально через npm.
+- Мок-данные детерминированы (mulberry32), чтобы демо было стабильным между сборками.
 
 ## Product
 
-_Describe the high-level user-facing capabilities of this app once they exist._
-
-## User preferences
-
-_Populate as you build — explicit user instructions worth remembering across sessions._
-
-## Gotchas
-
-_Populate as you build — sharp edges, "always run X before Y" rules._
-
-## Pointers
-
-- See the `pnpm-workspace` skill for workspace structure, TypeScript setup, and package details
+- Дашборд: KPI, динамика выручки Ozon+WB, заказы за неделю, карточки площадок, последние заказы
+- Маркетплейсы: обзор площадок + детальная страница каждой (KPI, график, воронка, топ-товары, география)
+- Воронка продаж: стадии WB-стиля (карточка → корзина → заказали → выкупили), фильтры по площадке,
+  дни/недели, штуки/рубли
+- Аналитика: фактические продажи (шт/₽), топ-товары, категории
+- Финансы: балансы, ожидаемые выплаты, движение средств
+- Настройки: API-подключения (Ozon, WB, Яндекс Маркет, Мегамаркет), профиль, уведомления
