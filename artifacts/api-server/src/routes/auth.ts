@@ -59,7 +59,14 @@ router.post("/auth/register", rateLimit, requireSameOrigin, async (req, res, nex
     await db.insert(emailVerificationTokensTable).values({
       userId: user.id, tokenHash: hashToken(token), expiresAt: new Date(Date.now() + 30 * 60_000),
     });
-    await sendVerificationEmail(email, token);
+    try {
+      await sendVerificationEmail(email, token);
+    } catch (mailError) {
+      await db.delete(usersTable).where(eq(usersTable.id, user.id));
+      req.log.error({ err: mailError }, "Verification email delivery failed");
+      res.status(503).json({ error: "Не удалось отправить письмо. Проверьте настройки почты и попробуйте снова." });
+      return;
+    }
     res.status(201).json({ message: "Аккаунт создан. Проверьте почту и подтвердите email." });
   } catch (error) {
     next(error);
