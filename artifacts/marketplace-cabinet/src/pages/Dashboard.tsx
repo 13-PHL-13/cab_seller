@@ -38,7 +38,7 @@ export default function DashboardPage() {
     { label: "Выручка", value: formatMoney(data?.revenue ?? 0), icon: <DollarSign size={17} /> },
     { label: "Заказы", value: formatNumber(data?.orders ?? 0), icon: <ShoppingCart size={17} /> },
     { label: "Проданные единицы", value: formatNumber(data?.units ?? 0), icon: <Package size={17} /> },
-    { label: "Средний чек", value: formatMoney(data?.averageOrderValue ?? 0), icon: <BarChart3 size={17} /> },
+    { label: "Средний чек", value: (data && data.averageOrderValue > 0 ? formatMoney(data.averageOrderValue) : "—"), icon: <BarChart3 size={17} /> },
   ];
 
   return (
