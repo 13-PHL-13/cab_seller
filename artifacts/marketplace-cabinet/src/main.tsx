@@ -15,7 +15,7 @@ function Root() {
     </div>;
   }
 
-  return <ClerkProvider publishableKey={publishableKey} proxyUrl={import.meta.env.PROD ? "/api/__clerk" : undefined}>
+  return <ClerkProvider publishableKey={publishableKey} proxyUrl={import.meta.env.PROD ? "/api/__clerk" : undefined} afterSignOutUrl="/" signInFallbackRedirectUrl="/" signUpFallbackRedirectUrl="/">
     <Show when="signed-in">
       <div style={{ position: 'fixed', right: 20, top: 16, zIndex: 50 }}><UserButton /></div>
       <ErrorBoundary><App /></ErrorBoundary>
