@@ -65,8 +65,17 @@ export default function SettingsPage() {
           : { apiKey: credentials.apiKey ?? '' },
       );
       await refreshConnections();
-      setCredential(pid, 'apiKey', '');
-      if (pid === 'ozon') setCredential(pid, 'clientId', '');
+      setSettings((current) => {
+        const next = {
+          ...current,
+          connections: {
+            ...current.connections,
+            [pid]: { ...current.connections[pid], credentials: {} },
+          },
+        };
+        saveSettings(next);
+        return next;
+      });
     } catch (error) {
       setConnectionErrors((current) => ({ ...current, [pid]: formatApiError(error) }));
     } finally {
@@ -87,8 +96,18 @@ export default function SettingsPage() {
     }
   };
 
-  const syncNow = async () => {
-    await refreshConnections();
+  const syncNow = async (pid: string) => {
+    if (pid !== 'ozon' && pid !== 'wb') return;
+    setBusy(pid);
+    setConnectionErrors((current) => ({ ...current, [pid]: '' }));
+    try {
+      await (await import('@/lib/marketplace-api')).getMarketplaceDashboard('30d', pid);
+      await refreshConnections();
+    } catch (error) {
+      setConnectionErrors((current) => ({ ...current, [pid]: formatApiError(error) }));
+    } finally {
+      setBusy(null);
+    }
   };
 
   const toggleNotification = (key: keyof AppSettings['notifications']) => {
@@ -204,7 +223,7 @@ export default function SettingsPage() {
                     Документация API
                   </a>
                   {conn.connected ? (
-                    <button className="link" style={{ background: 'none', border: 0, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 6 }} onClick={() => void syncNow()}>
+                    <button className="link" style={{ background: 'none', border: 0, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 6 }} onClick={() => void syncNow(p.id)}>
                       <RefreshCw size={13} />
                       Синхронизировать сейчас
                     </button>
