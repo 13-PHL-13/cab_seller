@@ -332,7 +332,12 @@ router.get("/marketplace/dashboard", async (req, res): Promise<void> => {
       revenueChangePercent: null,
       orders,
       units,
-      averageOrderValue: orders > 0 ? revenue / orders : 0,
+      // Ozon order counts are not currently sourced from a reliable metric.
+      // Do not divide combined Ozon+WB revenue by a WB-only order denominator.
+      averageOrderValue:
+        orders > 0 && !(marketplace === "all" && snapshots.has("ozon"))
+          ? revenue / orders
+          : 0,
       salesSeries,
       funnels,
       partialErrors,
