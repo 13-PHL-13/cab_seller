@@ -9,6 +9,11 @@ const basePath = process.env.BASE_PATH || '/';
 export default defineConfig({
   base: basePath,
   plugins: [react(), tailwindcss()],
+  define: {
+    'import.meta.env.VITE_CLERK_PUBLISHABLE_KEY': JSON.stringify(
+      process.env.CLERK_PUBLISHABLE_KEY ?? process.env.VITE_CLERK_PUBLISHABLE_KEY ?? '',
+    ),
+  },
   resolve: {
     alias: {
       '@': path.resolve(import.meta.dirname, 'src'),

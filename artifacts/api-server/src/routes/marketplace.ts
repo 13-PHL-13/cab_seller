@@ -304,6 +304,7 @@ router.get("/marketplace/dashboard", async (req, res): Promise<void> => {
   });
 
   const funnels = targets
+    .filter((target) => target !== "ozon")
     .map((target) => {
       const snapshot = snapshots.get(target);
       if (!snapshot) return null;
@@ -324,6 +325,11 @@ router.get("/marketplace/dashboard", async (req, res): Promise<void> => {
   const revenue = salesSeries.reduce((sum, day) => sum + day.totalRevenue, 0);
   const orders = funnels.reduce((sum, funnel) => sum + funnel.orders, 0);
   const units = funnels.reduce((sum, funnel) => sum + funnel.purchases, 0);
+  if (snapshots.has("ozon")) {
+    partialErrors.push(
+      "Ozon: API-метрика ordered_units не используется как число заказов или выкупов; эти показатели пока не включены в итог.",
+    );
+  }
   res.json(
     GetMarketplaceDashboardResponse.parse({
       period,
@@ -332,7 +338,12 @@ router.get("/marketplace/dashboard", async (req, res): Promise<void> => {
       revenueChangePercent: null,
       orders,
       units,
-      averageOrderValue: orders > 0 ? revenue / orders : 0,
+      // Ozon order counts are not currently sourced from a reliable metric.
+      // Do not divide combined Ozon+WB revenue by a WB-only order denominator.
+      averageOrderValue:
+        orders > 0 && !(marketplace === "all" && snapshots.has("ozon"))
+          ? revenue / orders
+          : 0,
       salesSeries,
       funnels,
       partialErrors,

@@ -1,11 +1,11 @@
 /**
  * Настройки пользователя: API-подключения, профиль, уведомления.
- * Хранятся в localStorage. При появлении бэкенда — миграция на API.
+ * Локально хранятся только настройки интерфейса. API-секреты никогда не сохраняются в браузере.
  */
 
 export interface Connection {
   connected: boolean;
-  credentials: Record<string, string>;
+  credentials: Record<string, string>; // always empty; secrets are never persisted
   syncedAt: number | null; // ms последней синхронизации
 }
 
@@ -104,10 +104,10 @@ const DEFAULT_SETTINGS: AppSettings = {
     API_PLATFORMS.map((p) => [p.id, { connected: false, credentials: {}, syncedAt: null } as Connection]),
   ),
   profile: {
-    name: 'ИП Клеедин А. Ю.',
-    email: 'seller@navigator.ru',
-    company: 'ИП Клеедин А. Ю.',
-    inn: '7712345678',
+    name: '',
+    email: '',
+    company: '',
+    inn: '',
   },
   notifications: {
     dailyReport: true,
@@ -123,16 +123,33 @@ export function loadSettings(): AppSettings {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) return DEFAULT_SETTINGS;
     const parsed = JSON.parse(raw) as Partial<AppSettings>;
-    return {
-      connections: { ...DEFAULT_SETTINGS.connections, ...(parsed.connections ?? {}) },
+    // Discard credentials and fake connection states from older demo versions.
+    const connections = Object.fromEntries(API_PLATFORMS.map((p) => [p.id, {
+      connected: false,
+      credentials: {},
+      syncedAt: null,
+    }]));
+    const safeSettings: AppSettings = {
+      connections,
       profile: { ...DEFAULT_SETTINGS.profile, ...(parsed.profile ?? {}) },
       notifications: { ...DEFAULT_SETTINGS.notifications, ...(parsed.notifications ?? {}) },
     };
+    // Rewrite legacy storage immediately so previously saved API keys are erased.
+    saveSettings(safeSettings);
+    return safeSettings;
   } catch {
     return DEFAULT_SETTINGS;
   }
 }
 
 export function saveSettings(settings: AppSettings): void {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(settings));
+  const safeSettings: AppSettings = {
+    ...settings,
+    connections: Object.fromEntries(Object.entries(settings.connections).map(([id]) => [id, {
+      connected: false,
+      credentials: {},
+      syncedAt: null,
+    }])),
+  };
+  localStorage.setItem(STORAGE_KEY, JSON.stringify(safeSettings));
 }

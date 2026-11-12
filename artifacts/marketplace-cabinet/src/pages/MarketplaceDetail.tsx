@@ -1,262 +1,46 @@
-import { useMemo } from 'react';
-import { Link, useRoute } from 'wouter';
-import { RefreshCw, ArrowUpRight, MapPin } from 'lucide-react';
-import {
-  Area,
-  AreaChart,
-  CartesianGrid,
-  Line,
-  LineChart,
-  ResponsiveContainer,
-  Tooltip,
-  XAxis,
-  YAxis,
-} from 'recharts';
-import {
-  PLATFORMS,
-  PRODUCTS,
-  GEOGRAPHY,
-  daysFor,
-  periodKpis,
-  revenueSeries,
-  funnelStages,
-  funnelSeries,
-  logDomain,
-  logTicks,
-} from '@/data/mock';
-import type { PlatformId } from '@/data/mock';
-import { formatMoney, formatNumber } from '@/lib/format';
-import { PlatformChip, Delta, EmptyState } from '@/components/ui-bits';
-
-const PERIODS = [
-  { key: 'week', label: 'Неделя', days: 7 },
-  { key: 'month', label: 'Месяц', days: 30 },
-  { key: 'quarter', label: 'Квартал', days: 90 },
-] as const;
-
-const shortMoney = (v: number): string => (Math.abs(v) >= 1000 ? `${Math.round(v / 1000)}k` : String(Math.round(v)));
+import { useEffect, useState } from "react";
+import { Link, useRoute } from "wouter";
+import { Area, AreaChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
+import { getMarketplaceDashboard, formatApiError } from "@/lib/marketplace-api";
+import type { MarketplaceDashboard, MarketplaceId } from "@/lib/marketplace-api";
+import { formatMoney, formatNumber } from "@/lib/format";
+import { EmptyState } from "@/components/ui-bits";
 
 export default function MarketplaceDetailPage() {
-  const [match, params] = useRoute('/marketplace/:id');
-  const id = match ? (params?.id ?? '') : '';
-  const platform = PLATFORMS.find((p) => p.id === id);
+  const [match, params] = useRoute("/marketplace/:id");
+  const id = match ? (params?.id ?? "") : "";
+  const valid = id === "ozon" || id === "wb";
+  const marketplace: MarketplaceId = id === "ozon" ? "ozon" : "wildberries";
+  const [data, setData] = useState<MarketplaceDashboard | null>(null);
+  const [error, setError] = useState("");
+  const [loading, setLoading] = useState(true);
 
-  if (!platform) {
-    return (
-      <EmptyState
-        icon={<MapPin size={22} />}
-        title="Площадка не найдена"
-        text="Возможно, она ещё не подключена."
-        action={<Link href="/settings" className="btn btn-primary">Перейти в настройки</Link>}
-      />
-    );
-  }
+  useEffect(() => {
+    if (!valid) { setLoading(false); return; }
+    let active = true;
+    setLoading(true);
+    getMarketplaceDashboard("30d", marketplace).then((value) => { if (active) { setData(value); setError(""); } })
+      .catch((reason) => { if (active) { setData(null); setError(formatApiError(reason)); } })
+      .finally(() => { if (active) setLoading(false); });
+    return () => { active = false; };
+  }, [valid, marketplace]);
 
-  const pid = platform.id as PlatformId;
-  return <PlatformView pid={pid} />;
+  if (!valid) return <EmptyState icon={null} title="Площадка не найдена" text="Доступны только Ozon и Wildberries." action={<Link href="/marketplaces" className="btn btn-primary">К маркетплейсам</Link>} />;
+
+  const funnel = data?.funnels.find((item) => item.marketplace === marketplace);
+  const revenue = data?.salesSeries.reduce((sum, day) => sum + (marketplace === "ozon" ? day.ozonRevenue : day.wildberriesRevenue), 0) ?? 0;
+  const name = marketplace === "ozon" ? "Ozon" : "Wildberries";
+
+  return <>
+    <div className="page-header"><div><h1>{name}</h1><div className="subtitle">Реальные данные API за 30 дней</div></div><div className="header-actions"><Link href="/marketplaces" className="btn btn-outline">Все площадки</Link><Link href="/settings" className="btn btn-outline">Настройки API</Link></div></div>
+    {error ? <div className="info-banner" role="alert">{error}</div> : null}
+    {data?.partialErrors.map((item) => <div className="info-banner" role="status" key={item}>{item}</div>)}
+    <div className="kpi-grid">
+      {[["Выручка", formatMoney(revenue)], ["Заказы", formatNumber(funnel?.orders ?? 0)], ["Выкуплено, шт.", formatNumber(funnel?.purchases ?? 0)], ["Просмотры", formatNumber(funnel?.views ?? 0)]].map(([label, value]) => <div className="kpi-card" key={label}><div><div className="kpi-label">{label}</div><div className="kpi-value">{loading ? "…" : value}</div></div></div>)}
+    </div>
+    <div className="card"><div className="card-head"><div><h2 className="card-title">Выручка по дням</h2><div className="card-sub">Источник: API {name}</div></div></div>
+      {data?.salesSeries.length ? <ResponsiveContainer width="100%" height={280}><AreaChart data={data.salesSeries}><CartesianGrid strokeDasharray="4 6" stroke="#edf0f3" vertical={false}/><XAxis dataKey="date" tickLine={false} axisLine={false} minTickGap={28}/><YAxis tickFormatter={(v) => `${Math.round(Number(v)/1000)}k`} tickLine={false} axisLine={false}/><Tooltip formatter={(v) => formatMoney(Number(v))}/><Area dataKey={marketplace === "ozon" ? "ozonRevenue" : "wildberriesRevenue"} name="Выручка" stroke={marketplace === "ozon" ? "#005BFF" : "#A73AFD"} fillOpacity={0.12}/></AreaChart></ResponsiveContainer> : <div className="empty-state">{loading ? "Загружаем…" : "Нет данных за выбранный период."}</div>}
+    </div>
+    <div className="info-banner">Список товаров, остатки и география пока не поддерживаются API этого кабинета. Демонстрационные данные удалены из этой страницы.</div>
+  </>;
 }
-
-function PlatformView({ pid }: { pid: PlatformId }) {
-  const platform = PLATFORMS.find((p) => p.id === pid)!;
-  const daysData = useMemo(() => daysFor(pid), [pid]);
-  const kpis = useMemo(() => periodKpis([pid], 30), [pid]);
-  const series = useMemo(() => revenueSeries([pid], 30), [pid]);
-  const stages = useMemo(() => funnelStages([pid], 30, 'units'), [pid]);
-  const funnelData = useMemo(() => funnelSeries([pid], 30, 'units', 'day'), [pid]);
-  const funnelYDomain = useMemo(
-    () => logDomain(funnelData.flatMap((p) => [p.visits, p.cart, p.ordered, p.bought])),
-    [funnelData],
-  );
-  const funnelYTicks = useMemo(() => logTicks(funnelYDomain), [funnelYDomain]);
-  const products = useMemo(() => PRODUCTS.filter((p) => p.platform === pid).sort((a, b) => b.revenue - a.revenue), [pid]);
-
-  const buyoutRate = useMemo(() => {
-    const days = daysData.slice(-30);
-    const ordered = days.reduce((a, d) => a + d.units, 0);
-    const bought = days.reduce((a, d) => a + d.bought, 0);
-    return ordered > 0 ? (bought / ordered) * 100 : 0;
-  }, [daysData]);
-
-  return (
-    <>
-      <div className="page-header">
-        <div style={{ display: 'flex', alignItems: 'center', gap: 13 }}>
-          <PlatformChip id={pid} size={42} />
-          <div>
-            <h1>{platform.name}</h1>
-            <div className="subtitle" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <span className="badge badge-green">Активен</span>
-              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
-                <RefreshCw size={12} />
-                Синхронизация: 2 мин назад
-              </span>
-            </div>
-          </div>
-        </div>
-        <div className="header-actions">
-          <Link href="/funnel" className="btn btn-outline">Воронка продаж</Link>
-          <Link href="/settings" className="btn btn-outline">Настройки API</Link>
-        </div>
-      </div>
-
-      <div className="kpi-grid">
-        <div className="kpi-card">
-          <div>
-            <div className="kpi-label">Выручка за месяц</div>
-            <div className="kpi-value">{formatMoney(kpis.revenue.value)}</div>
-            <Delta value={kpis.revenue.change} />
-          </div>
-        </div>
-        <div className="kpi-card">
-          <div>
-            <div className="kpi-label">Заказы</div>
-            <div className="kpi-value">{formatNumber(kpis.orders.value)}</div>
-            <Delta value={kpis.orders.change} />
-          </div>
-        </div>
-        <div className="kpi-card">
-          <div>
-            <div className="kpi-label">Средний чек</div>
-            <div className="kpi-value">{formatMoney(kpis.avgCheck.value)}</div>
-            <Delta value={kpis.avgCheck.change} />
-          </div>
-        </div>
-        <div className="kpi-card">
-          <div>
-            <div className="kpi-label">Процент выкупа</div>
-            <div className="kpi-value">{buyoutRate.toFixed(1).replace('.', ',')}%</div>
-            <div className="kpi-delta" style={{ marginTop: 6 }}>фактические продажи: {formatMoney(kpis.boughtRevenue.value)}</div>
-          </div>
-        </div>
-      </div>
-
-      <div className="card" style={{ marginBottom: 14 }}>
-        <div className="card-head">
-          <div>
-            <h2 className="card-title">Заказано товаров</h2>
-            <div className="card-sub">В рублях за 30 дней</div>
-          </div>
-        </div>
-        <ResponsiveContainer width="100%" height={260}>
-          <AreaChart data={series} margin={{ top: 5, right: 8, left: 0, bottom: 0 }}>
-            <defs>
-              <linearGradient id={`grad-detail-${pid}`} x1="0" y1="0" x2="0" y2="1">
-                <stop offset="0%" stopColor={platform.color} stopOpacity={0.25} />
-                <stop offset="100%" stopColor={platform.color} stopOpacity={0.02} />
-              </linearGradient>
-            </defs>
-            <CartesianGrid strokeDasharray="4 6" stroke="#edf0f3" vertical={false} />
-            <XAxis dataKey="label" tickLine={false} axisLine={false} interval="preserveStartEnd" minTickGap={28} />
-            <YAxis tickFormatter={shortMoney} tickLine={false} axisLine={false} width={44} />
-            <Tooltip formatter={(v) => formatMoney(Number(v))} />
-            <Area type="monotone" dataKey={pid} name={platform.name} stroke={platform.color} strokeWidth={2.2} fill={`url(#grad-detail-${pid})`} dot={false} />
-          </AreaChart>
-        </ResponsiveContainer>
-      </div>
-
-      <div className="card" style={{ marginBottom: 14 }}>
-        <div className="card-head">
-          <div>
-            <h2 className="card-title">Воронка продаж</h2>
-            <div className="card-sub">За 30 дней, штуки, лог. шкала</div>
-          </div>
-          <Link href="/funnel" className="link">Подробнее →</Link>
-        </div>
-        <div className="funnel-layout">
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-            {stages.map((s) => (
-              <div className="funnel-stage active" key={s.key}>
-                <div className="stage-name">
-                  <span className="stage-check" style={{ background: s.color }} />
-                  {s.name}
-                </div>
-                <div className="stage-value">
-                  {formatNumber(s.value)}
-                  <Delta value={s.change} />
-                </div>
-                {s.note ? <div className="stage-note">{s.note}</div> : null}
-              </div>
-            ))}
-          </div>
-          <ResponsiveContainer width="100%" height={330}>
-            <LineChart data={funnelData} margin={{ top: 8, right: 12, left: 0, bottom: 0 }}>
-              <CartesianGrid stroke="#eef1f4" vertical={false} />
-              <XAxis dataKey="label" tickLine={false} axisLine={false} minTickGap={26} />
-              <YAxis
-                scale="log"
-                domain={funnelYDomain}
-                allowDataOverflow
-                tickLine={false}
-                axisLine={false}
-                width={48}
-                tickFormatter={(v: number) => formatNumber(v)}
-                ticks={funnelYTicks}
-              />
-              <Tooltip formatter={(v) => formatNumber(Number(v))} />
-              <Line type="monotone" dataKey="visits" name="Перешли в карточку" stroke="#e6448c" strokeWidth={2.2} dot={false} />
-              <Line type="monotone" dataKey="cart" name="Добавили в корзину" stroke="#7c3aed" strokeWidth={2.2} dot={false} />
-              <Line type="monotone" dataKey="ordered" name="Заказали" stroke="#14b8a6" strokeWidth={2.2} dot={false} />
-              <Line type="monotone" dataKey="bought" name="Выкупили" stroke="#3b82f6" strokeWidth={2.2} dot={false} />
-            </LineChart>
-          </ResponsiveContainer>
-        </div>
-      </div>
-
-      <div className="grid-2-even">
-        <div className="card">
-          <div className="card-head">
-            <div>
-              <h2 className="card-title">Топ товаров</h2>
-              <div className="card-sub">По выручке за месяц</div>
-            </div>
-          </div>
-          <div style={{ overflowX: 'auto' }}>
-            <table className="table">
-              <thead>
-                <tr>
-                  <th>Товар</th>
-                  <th>Заказы</th>
-                  <th>Выручка</th>
-                  <th>Остаток</th>
-                </tr>
-              </thead>
-              <tbody>
-                {products.map((p) => (
-                  <tr key={p.id}>
-                    <td style={{ fontWeight: 600 }}>{p.name}</td>
-                    <td className="num">{formatNumber(p.orders)}</td>
-                    <td className="num" style={{ fontWeight: 700 }}>{formatMoney(p.revenue)}</td>
-                    <td className="num">{p.stock} шт</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </div>
-
-        <div className="card">
-          <div className="card-head">
-            <div>
-              <h2 className="card-title">География заказов</h2>
-              <div className="card-sub">Доля региона в заказах</div>
-            </div>
-          </div>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 11 }}>
-            {GEOGRAPHY[pid].map((g) => (
-              <div key={g.region}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, fontWeight: 600, marginBottom: 4 }}>
-                  <span>{g.region}</span>
-                  <span className="num" style={{ color: 'var(--muted)' }}>{g.share.toFixed(1).replace('.', ',')}%</span>
-                </div>
-                <div className="progress">
-                  <div style={{ width: `${g.share * 3}%`, background: platform.color }} />
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-      </div>
-    </>
-  );
-}
-

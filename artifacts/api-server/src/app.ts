@@ -35,7 +35,16 @@ app.use(
 
 app.use(CLERK_PROXY_PATH, clerkProxyMiddleware());
 
-app.use(cors({ credentials: true, origin: true }));
+const allowedOrigins = (process.env.CORS_ORIGINS ?? "")
+  .split(",")
+  .map((origin) => origin.trim())
+  .filter(Boolean);
+
+// Same-origin requests do not need CORS. Cross-origin access is opt-in.
+app.use(cors({
+  credentials: true,
+  origin: allowedOrigins.length > 0 ? allowedOrigins : false,
+}));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use(

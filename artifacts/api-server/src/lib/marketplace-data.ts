@@ -142,8 +142,10 @@ export async function getOzonSnapshot(
     const point: DailyPoint = {
       date,
       revenue: asNumber(metrics[0]),
-      orders: asNumber(metrics[1]),
-      units: asNumber(metrics[1]),
+      // ordered_units is a unit count, not an order count or confirmed buyout.
+      // Keep both unavailable rather than fabricating funnel conversion rates.
+      orders: 0,
+      units: 0,
       views: asNumber(metrics[2]),
       cartAdds: asNumber(metrics[3]),
     };
@@ -162,24 +164,35 @@ async function requestWildberriesFunnel(
   from: string,
   to: string,
 ): Promise<Record<string, unknown>> {
-  return requestJson(
-    "https://seller-analytics-api.wildberries.ru/api/analytics/v3/sales-funnel/products",
-    {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: credentials.apiKey,
+  const allCards: unknown[] = [];
+  const pageSize = 1000;
+  const maxPages = 10;
+
+  for (let page = 0; page < maxPages; page += 1) {
+    const response = await requestJson(
+      "https://seller-analytics-api.wildberries.ru/api/analytics/v3/sales-funnel/products",
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: credentials.apiKey,
+        },
+        body: JSON.stringify({
+          selectedPeriod: { start: from, end: to },
+          nmIds: [],
+          skipDeletedNm: false,
+          orderBy: { field: "openCard", mode: "desc" },
+          limit: pageSize,
+          offset: page * pageSize,
+        }),
       },
-      body: JSON.stringify({
-        selectedPeriod: { start: from, end: to },
-        nmIds: [],
-        skipDeletedNm: false,
-        orderBy: { field: "openCard", mode: "desc" },
-        limit: 1000,
-        offset: 0,
-      }),
-    },
-  );
+    );
+    const cards = wildberriesCards(response);
+    allCards.push(...cards);
+    if (cards.length < pageSize) break;
+  }
+
+  return { data: { cards: allCards } };
 }
 
 async function requestWildberriesSales(
@@ -251,7 +264,7 @@ export async function getWildberriesSnapshot(
   for (const rawSale of sales) {
     const sale = asRecord(rawSale);
     const date = dateKey(sale["date"]);
-    if (!date || date > to || sale["isCancel"] === true) continue;
+    if (!date || date < from || date > to || sale["isCancel"] === true) continue;
     const point = snapshot.daily.get(date) ?? {
       date,
       revenue: 0,
@@ -263,9 +276,10 @@ export async function getWildberriesSnapshot(
     const price = asNumber(
       sale["finishedPrice"] ?? sale["priceWithDisc"] ?? sale["retailPrice"],
     );
-    const quantity = Math.max(1, asNumber(sale["quantity"]));
+    const quantity = asNumber(sale["quantity"]);
+    if (quantity <= 0 || price < 0) continue;
     point.revenue += price * quantity;
-    point.orders += quantity;
+    point.orders += 1;
     point.units += quantity;
     snapshot.daily.set(date, point);
   }

@@ -1,6 +1,11 @@
 import { TrendingDown, TrendingUp } from 'lucide-react';
-import type { OrderStatus, PlatformId } from '@/data/mock';
-import { PLATFORMS } from '@/data/mock';
+type PlatformId = 'ozon' | 'wb';
+type OrderStatus = 'Доставлен' | 'В пути' | 'Собирается' | 'Отменён';
+
+const PLATFORMS = [
+  { id: 'ozon', name: 'Ozon', color: '#005BFF', initial: 'O' },
+  { id: 'wb', name: 'Wildberries', color: '#A73AFD', initial: 'W' },
+] as const;
 
 /** Цветной чип площадки (O / W). */
 export function PlatformChip({ id, size = 34 }: { id: PlatformId; size?: number }) {
