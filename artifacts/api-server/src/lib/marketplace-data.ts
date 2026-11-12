@@ -142,9 +142,9 @@ export async function getOzonSnapshot(
     const point: DailyPoint = {
       date,
       revenue: asNumber(metrics[0]),
-      orders: asNumber(metrics[1]),
-      // Ozon's ordered_units metric is not a confirmed buyout metric.
-      // Keep purchases unavailable rather than reporting ordered units as buyouts.
+      // ordered_units is a unit count, not an order count or confirmed buyout.
+      // Keep both unavailable rather than fabricating funnel conversion rates.
+      orders: 0,
       units: 0,
       views: asNumber(metrics[2]),
       cartAdds: asNumber(metrics[3]),
