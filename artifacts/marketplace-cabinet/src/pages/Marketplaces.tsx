@@ -40,6 +40,7 @@ export default function MarketplacesPage() {
         </div>
       </div>
       {error ? <div className="info-banner" role="alert">{error}</div> : null}
+      {dashboard?.partialErrors.map((item) => <div className="info-banner" role="status" key={item}>{item}</div>)}
       <div className="grid-2-even">
         {(["ozon", "wildberries"] as const).map((id) => {
           const connection = connections.find((item) => item.marketplace === id);
