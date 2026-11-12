@@ -3,7 +3,7 @@ import { ExternalLink, Eye, EyeOff, Info, KeyRound, RefreshCw, ShieldCheck, User
 import { API_PLATFORMS, loadSettings, saveSettings } from '@/data/settings';
 import type { AppSettings } from '@/data/settings';
 import { timeAgo } from '@/lib/format';
-import { connectMarketplace, disconnectMarketplace, getMarketplaceConnections, formatApiError } from '@/lib/marketplace-api';
+import { connectMarketplace, disconnectMarketplace, getMarketplaceConnections, getMarketplaceDashboard, formatApiError } from '@/lib/marketplace-api';
 import type { MarketplaceId } from '@/lib/marketplace-api';
 
 type Tab = 'api' | 'profile' | 'notifications';
@@ -101,7 +101,7 @@ export default function SettingsPage() {
     setBusy(pid);
     setConnectionErrors((current) => ({ ...current, [pid]: '' }));
     try {
-      await (await import('@/lib/marketplace-api')).getMarketplaceDashboard('30d', pid);
+      await getMarketplaceDashboard('30d', pid);
       await refreshConnections();
     } catch (error) {
       setConnectionErrors((current) => ({ ...current, [pid]: formatApiError(error) }));
@@ -153,7 +153,7 @@ export default function SettingsPage() {
             </div>
           </div>
 
-          {API_PLATFORMS.map((p) => {
+          {API_PLATFORMS.filter((p) => p.id === 'ozon' || p.id === 'wb').map((p) => {
             const conn = settings.connections[p.id];
             return (
               <div className={`conn-card${conn.connected ? ' connected' : ''}`} key={p.id} style={{ marginBottom: 14 }}>
