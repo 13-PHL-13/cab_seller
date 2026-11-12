@@ -15,6 +15,7 @@ async function sendMail(email: string, subjectText: string, paragraphs: string[]
   const from = required("SMTP_FROM");
 
   const socket = tls.connect({ host, port, servername: host });
+  socket.setTimeout(15_000, () => socket.destroy(new Error("SMTP connection timed out.")));
   socket.setEncoding("utf8");
   let buffer = "";
   let pendingReply = "";
