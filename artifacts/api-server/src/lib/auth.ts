@@ -34,9 +34,11 @@ export async function hashPassword(password: string): Promise<string> {
 
 export async function verifyPassword(password: string, stored: string): Promise<boolean> {
   const [algorithm, version, n, r, p, saltEncoded, hashEncoded] = stored.split("$");
-  if (algorithm !== "scrypt" || version !== "v1" || !n || !r || !p || !saltEncoded || !hashEncoded) return false;
+  if (algorithm !== "scrypt" || version !== "v1" || n !== "32768" || r !== "8" || p !== "1" || !saltEncoded || !hashEncoded) return false;
+  const salt = Buffer.from(saltEncoded, "base64url");
   const expected = Buffer.from(hashEncoded, "base64url");
-  const actual = (await scrypt(password, Buffer.from(saltEncoded, "base64url"), expected.length, {
+  if (salt.length !== 16 || expected.length !== 64) return false;
+  const actual = (await scrypt(password, salt, expected.length, {
     N: Number(n), r: Number(r), p: Number(p), maxmem: 64 * 1024 * 1024,
   })) as Buffer;
   return actual.length === expected.length && timingSafeEqual(actual, expected);
