@@ -21,4 +21,13 @@ app.use(express.json({ limit: "32kb" }));
 app.use(express.urlencoded({ extended: true, limit: "32kb" }));
 app.use("/api", router);
 
+app.use((error: unknown, req: express.Request, res: express.Response, next: express.NextFunction) => {
+  if (res.headersSent) {
+    next(error);
+    return;
+  }
+  logger.error({ err: error, requestId: req.id }, "Unhandled API request error");
+  res.status(500).json({ error: "Внутренняя ошибка сервера. Попробуйте позже." });
+});
+
 export default app;
