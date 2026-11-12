@@ -101,7 +101,7 @@ export default function SettingsPage() {
     setBusy(pid);
     setConnectionErrors((current) => ({ ...current, [pid]: '' }));
     try {
-      await getMarketplaceDashboard('30d', pid);
+      await getMarketplaceDashboard('30d', pid === 'wb' ? 'wildberries' : 'ozon');
       await refreshConnections();
     } catch (error) {
       setConnectionErrors((current) => ({ ...current, [pid]: formatApiError(error) }));
