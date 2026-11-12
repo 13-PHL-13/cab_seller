@@ -15,7 +15,7 @@ function Root() {
     </div>;
   }
 
-  return <ClerkProvider publishableKey={publishableKey} proxyUrl="/api/__clerk">
+  return <ClerkProvider publishableKey={publishableKey} proxyUrl={import.meta.env.PROD ? "/api/__clerk" : undefined}>
     <Show when="signed-in">
       <div style={{ position: 'fixed', right: 20, top: 16, zIndex: 50 }}><UserButton /></div>
       <ErrorBoundary><App /></ErrorBoundary>
@@ -25,7 +25,7 @@ function Root() {
         <div>
           <h1>Навигатор продаж</h1>
           <p>Войдите, чтобы подключить маркетплейсы и просматривать данные.</p>
-          <SignInButton mode="modal"><button className="btn btn-primary">Войти</button></SignInButton>
+          <SignInButton mode="modal" withSignUp><button className="btn btn-primary">Войти</button></SignInButton>
         </div>
       </div>
     </Show>
