@@ -1,192 +1,37 @@
-import { useMemo, useState } from 'react';
-import {
-  CartesianGrid,
-  Line,
-  LineChart,
-  ResponsiveContainer,
-  Tooltip,
-  XAxis,
-  YAxis,
-} from 'recharts';
-import { PLATFORMS, PRODUCTS, periodKpis, unitsSeries, revenueSeries } from '@/data/mock';
-import { formatMoney, formatNumber } from '@/lib/format';
-import { PlatformChip, Delta } from '@/components/ui-bits';
+import { useEffect, useState } from "react";
+import { formatMoney, formatNumber } from "@/lib/format";
+import { getMarketplaceDashboard, formatApiError } from "@/lib/marketplace-api";
+import type { MarketplaceDashboard, MarketplacePeriod } from "@/lib/marketplace-api";
+import { Area, AreaChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 
-const PERIODS = [
-  { key: 'week', label: 'Неделя', days: 7 },
-  { key: 'month', label: 'Месяц', days: 30 },
-  { key: 'quarter', label: 'Квартал', days: 90 },
-] as const;
-
-type PeriodKey = (typeof PERIODS)[number]['key'];
+const periods: Array<{ key: MarketplacePeriod; label: string }> = [{ key: "7d", label: "Неделя" }, { key: "30d", label: "Месяц" }, { key: "90d", label: "Квартал" }];
 
 export default function AnalyticsPage() {
-  const [period, setPeriod] = useState<PeriodKey>('month');
-  const [metric, setMetric] = useState<'units' | 'rub'>('units');
-  const days = PERIODS.find((p) => p.key === period)!.days;
+  const [period, setPeriod] = useState<MarketplacePeriod>("30d");
+  const [data, setData] = useState<MarketplaceDashboard | null>(null);
+  const [error, setError] = useState("");
+  const [loading, setLoading] = useState(true);
 
-  const kpis = useMemo(() => periodKpis(['ozon', 'wb'], days), [days]);
-  const data = useMemo(() => {
-    const base = metric === 'units' ? unitsSeries(['ozon', 'wb'], days) : revenueSeries(['ozon', 'wb'], days);
-    return base.map((row) => ({
-      ...row,
-      ozon: metric === 'units' ? row.ozon : row.ozonBought,
-      wb: metric === 'units' ? row.wb : row.wbBought,
-      total: Number(row.ozon) + Number(row.wb),
-    }));
-  }, [metric, days]);
+  useEffect(() => {
+    let active = true;
+    setLoading(true);
+    getMarketplaceDashboard(period, "all").then((value) => { if (active) { setData(value); setError(""); } })
+      .catch((reason) => { if (active) { setData(null); setError(formatApiError(reason)); } })
+      .finally(() => { if (active) setLoading(false); });
+    return () => { active = false; };
+  }, [period]);
 
-  const categories = useMemo(() => {
-    const map = new Map<string, number>();
-    for (const p of PRODUCTS) map.set(p.category, (map.get(p.category) ?? 0) + p.revenue);
-    return [...map.entries()].sort((a, b) => b[1] - a[1]);
-  }, []);
-
-  const maxCategory = categories[0]?.[1] ?? 1;
-  const boughtUnits = useMemo(() => {
-    const s = unitsSeries(['ozon', 'wb'], days);
-    return s.reduce((a, r) => a + Number(r.total), 0);
-  }, [days]);
-
-  return (
-    <>
-      <div className="page-header">
-        <div>
-          <h1>Аналитика</h1>
-          <div className="subtitle">Фактические продажи и товары по всем площадкам</div>
-        </div>
-        <div className="header-actions">
-          <div className="segmented">
-            <button className={metric === 'units' ? 'active' : ''} onClick={() => setMetric('units')}>Штуки</button>
-            <button className={metric === 'rub' ? 'active' : ''} onClick={() => setMetric('rub')}>Рубли</button>
-          </div>
-          <div className="segmented">
-            {PERIODS.map((p) => (
-              <button key={p.key} className={period === p.key ? 'active' : ''} onClick={() => setPeriod(p.key)}>
-                {p.label}
-              </button>
-            ))}
-          </div>
-        </div>
-      </div>
-
-      <div className="kpi-grid">
-        <div className="kpi-card">
-          <div>
-            <div className="kpi-label">Фактические продажи</div>
-            <div className="kpi-value">{formatMoney(kpis.boughtRevenue.value)}</div>
-            <Delta value={kpis.boughtRevenue.change} />
-          </div>
-        </div>
-        <div className="kpi-card">
-          <div>
-            <div className="kpi-label">Выкуплено, шт</div>
-            <div className="kpi-value">{formatNumber(boughtUnits)}</div>
-          </div>
-        </div>
-        <div className="kpi-card">
-          <div>
-            <div className="kpi-label">Заказы</div>
-            <div className="kpi-value">{formatNumber(kpis.orders.value)}</div>
-            <Delta value={kpis.orders.change} />
-          </div>
-        </div>
-        <div className="kpi-card">
-          <div>
-            <div className="kpi-label">Средний чек</div>
-            <div className="kpi-value">{formatMoney(kpis.avgCheck.value)}</div>
-            <Delta value={kpis.avgCheck.change} />
-          </div>
-        </div>
-      </div>
-
-      <div className="card" style={{ marginBottom: 14 }}>
-        <div className="card-head">
-          <div>
-            <h2 className="card-title">Фактические продажи</h2>
-            <div className="card-sub">{metric === 'units' ? 'Выкуплено, шт' : 'Выкуплено, ₽'} — с учётом возвратов</div>
-          </div>
-          <div className="chart-legend">
-            {PLATFORMS.map((p) => (
-              <span className="item" key={p.id}>
-                <span className="dot" style={{ background: p.color }} />
-                {p.name}
-              </span>
-            ))}
-            <span className="item">
-              <span className="dot" style={{ background: '#16232e' }} />
-              Всего
-            </span>
-          </div>
-        </div>
-        <ResponsiveContainer width="100%" height={300}>
-          <LineChart data={data} margin={{ top: 5, right: 8, left: 0, bottom: 0 }}>
-            <CartesianGrid strokeDasharray="4 6" stroke="#edf0f3" vertical={false} />
-            <XAxis dataKey="label" tickLine={false} axisLine={false} interval="preserveStartEnd" minTickGap={28} />
-            <YAxis tickLine={false} axisLine={false} width={48} tickFormatter={(v: number) => (metric === 'rub' ? `${Math.round(v / 1000)}k` : formatNumber(v))} />
-            <Tooltip formatter={(v) => (metric === 'rub' ? formatMoney(Number(v)) : formatNumber(Number(v)))} />
-            {PLATFORMS.map((p) => (
-              <Line key={p.id} type="monotone" dataKey={p.id} name={p.name} stroke={p.color} strokeWidth={2.2} dot={false} activeDot={{ r: 4 }} />
-            ))}
-            <Line type="monotone" dataKey="total" name="Всего" stroke="#16232e" strokeWidth={2} strokeDasharray="5 4" dot={false} />
-          </LineChart>
-        </ResponsiveContainer>
-      </div>
-
-      <div className="grid-2-even">
-        <div className="card">
-          <div className="card-head">
-            <div>
-              <h2 className="card-title">Топ товаров</h2>
-              <div className="card-sub">Все площадки, по выручке</div>
-            </div>
-          </div>
-          <div style={{ overflowX: 'auto' }}>
-            <table className="table">
-              <thead>
-                <tr>
-                  <th>Товар</th>
-                  <th>Площадка</th>
-                  <th>Заказы</th>
-                  <th>Выручка</th>
-                </tr>
-              </thead>
-              <tbody>
-                {[...PRODUCTS].sort((a, b) => b.revenue - a.revenue).slice(0, 8).map((p) => (
-                  <tr key={p.id}>
-                    <td style={{ fontWeight: 600 }}>{p.name}</td>
-                    <td><PlatformChip id={p.platform} size={22} /></td>
-                    <td className="num">{formatNumber(p.orders)}</td>
-                    <td className="num" style={{ fontWeight: 700 }}>{formatMoney(p.revenue)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </div>
-
-        <div className="card">
-          <div className="card-head">
-            <div>
-              <h2 className="card-title">Продажи по категориям</h2>
-              <div className="card-sub">Выручка, ₽</div>
-            </div>
-          </div>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-            {categories.map(([name, revenue]) => (
-              <div key={name}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 13, fontWeight: 600, marginBottom: 4 }}>
-                  <span>{name}</span>
-                  <span className="num" style={{ color: 'var(--muted)' }}>{formatMoney(revenue)}</span>
-                </div>
-                <div className="progress">
-                  <div style={{ width: `${(revenue / maxCategory) * 100}%`, background: 'var(--brand)' }} />
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-      </div>
-    </>
-  );
+  return <>
+    <div className="page-header"><div><h1>Аналитика</h1><div className="subtitle">Продажи и воронка по данным подключённых API</div></div>
+      <div className="segmented">{periods.map((item) => <button key={item.key} className={period === item.key ? "active" : ""} onClick={() => setPeriod(item.key)}>{item.label}</button>)}</div>
+    </div>
+    {error ? <div className="info-banner" role="alert">{error}</div> : null}
+    <div className="kpi-grid">
+      {[["Выручка", formatMoney(data?.revenue ?? 0)], ["Заказы", formatNumber(data?.orders ?? 0)], ["Проданные единицы", formatNumber(data?.units ?? 0)], ["Средний чек", formatMoney(data?.averageOrderValue ?? 0)]].map(([label, value]) => <div className="kpi-card" key={label}><div><div className="kpi-label">{label}</div><div className="kpi-value">{loading ? "…" : value}</div></div></div>)}
+    </div>
+    <div className="card"><div className="card-head"><div><h2 className="card-title">Выручка по дням</h2><div className="card-sub">Фактические значения, полученные от маркетплейсов</div></div></div>
+      {data?.salesSeries.length ? <ResponsiveContainer width="100%" height={320}><AreaChart data={data.salesSeries}><CartesianGrid strokeDasharray="4 6" stroke="#edf0f3" vertical={false}/><XAxis dataKey="date" tickLine={false} axisLine={false} minTickGap={28}/><YAxis tickFormatter={(v) => `${Math.round(Number(v)/1000)}k`} tickLine={false} axisLine={false}/><Tooltip formatter={(v) => formatMoney(Number(v))}/><Area dataKey="ozonRevenue" name="Ozon" stroke="#005BFF" fill="#005BFF" fillOpacity={0.12}/><Area dataKey="wildberriesRevenue" name="Wildberries" stroke="#A73AFD" fill="#A73AFD" fillOpacity={0.12}/></AreaChart></ResponsiveContainer> : <div className="empty-state">{loading ? "Загружаем…" : "Нет данных за выбранный период."}</div>}
+    </div>
+    <div className="info-banner">Детализация по SKU, категориям, остаткам и товарам пока не предоставляется серверным API кабинета и поэтому скрыта, а не заменяется демонстрационными значениями.</div>
+  </>;
 }
