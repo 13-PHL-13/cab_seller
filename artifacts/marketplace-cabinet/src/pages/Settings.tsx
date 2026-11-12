@@ -1,8 +1,10 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { ExternalLink, Eye, EyeOff, Info, KeyRound, RefreshCw, ShieldCheck, User, Bell, X, Check } from 'lucide-react';
 import { API_PLATFORMS, loadSettings, saveSettings } from '@/data/settings';
 import type { AppSettings } from '@/data/settings';
 import { timeAgo } from '@/lib/format';
+import { connectMarketplace, disconnectMarketplace, getMarketplaceConnections, formatApiError } from '@/lib/marketplace-api';
+import type { MarketplaceId } from '@/lib/marketplace-api';
 
 type Tab = 'api' | 'profile' | 'notifications';
 
@@ -10,6 +12,29 @@ export default function SettingsPage() {
   const [tab, setTab] = useState<Tab>('api');
   const [settings, setSettings] = useState<AppSettings>(() => loadSettings());
   const [showSecret, setShowSecret] = useState<Record<string, boolean>>({});
+  const [busy, setBusy] = useState<string | null>(null);
+  const [connectionErrors, setConnectionErrors] = useState<Record<string, string>>({});
+
+  const refreshConnections = async () => {
+    try {
+      const rows = await getMarketplaceConnections();
+      setSettings((current) => ({
+        ...current,
+        connections: {
+          ...current.connections,
+          ...Object.fromEntries(rows.map((row) => [row.marketplace, {
+            connected: row.connected,
+            credentials: {},
+            syncedAt: row.lastSyncAt ? new Date(row.lastSyncAt).getTime() : null,
+          }])),
+        },
+      }));
+    } catch (error) {
+      setConnectionErrors((current) => ({ ...current, _global: formatApiError(error) }));
+    }
+  };
+
+  useEffect(() => { void refreshConnections(); }, []);
 
   const update = (next: AppSettings) => {
     setSettings(next);
@@ -27,23 +52,43 @@ export default function SettingsPage() {
     });
   };
 
-  const connect = (_pid: string) => {
-    window.alert('Подключение пока недоступно в интерфейсе: требуется настроить клиентскую аутентификацию. Ключи не отправлялись и не сохранены.');
+  const connect = async (pid: string) => {
+    if (pid !== 'ozon' && pid !== 'wb') return;
+    const credentials = settings.connections[pid].credentials;
+    setBusy(pid);
+    setConnectionErrors((current) => ({ ...current, [pid]: '' }));
+    try {
+      await connectMarketplace(
+        pid as MarketplaceId,
+        pid === 'ozon'
+          ? { clientId: credentials.clientId ?? '', apiKey: credentials.apiKey ?? '' }
+          : { apiKey: credentials.apiKey ?? '' },
+      );
+      await refreshConnections();
+      setCredential(pid, 'apiKey', '');
+      if (pid === 'ozon') setCredential(pid, 'clientId', '');
+    } catch (error) {
+      setConnectionErrors((current) => ({ ...current, [pid]: formatApiError(error) }));
+    } finally {
+      setBusy(null);
+    }
   };
 
-  const disconnect = (pid: string) => {
-    const conn = settings.connections[pid];
-    update({
-      ...settings,
-      connections: {
-        ...settings.connections,
-        [pid]: { ...conn, connected: false, syncedAt: null },
-      },
-    });
+  const disconnect = async (pid: string) => {
+    if (pid !== 'ozon' && pid !== 'wb') return;
+    setBusy(pid);
+    try {
+      await disconnectMarketplace(pid as MarketplaceId);
+      await refreshConnections();
+    } catch (error) {
+      setConnectionErrors((current) => ({ ...current, [pid]: formatApiError(error) }));
+    } finally {
+      setBusy(null);
+    }
   };
 
-  const syncNow = (_pid: string) => {
-    window.alert('Синхронизация недоступна: сначала необходимо подключить авторизованный API-клиент.');
+  const syncNow = async () => {
+    await refreshConnections();
   };
 
   const toggleNotification = (key: keyof AppSettings['notifications']) => {
@@ -79,12 +124,13 @@ export default function SettingsPage() {
 
       {tab === 'api' && (
         <div>
+          {connectionErrors._global ? <div className="info-banner" role="alert">{connectionErrors._global}</div> : null}
           <div className="info-banner">
             <Info size={17} />
             <div>
               <strong>Как подключить API</strong>
               <br />
-              Получите API-ключ в личном кабинете маркетплейса и введите его здесь. Поддерживаются серверные подключения Ozon и Wildberries. Клиентская авторизация ещё не настроена, поэтому подключение и синхронизация из этого интерфейса временно отключены.
+              Получите API-ключ в личном кабинете маркетплейса и введите его здесь. Поддерживаются серверные подключения Ozon и Wildberries. Ключи отправляются на защищённый серверный endpoint и сохраняются там в зашифрованном виде. Для работы требуется активная сессия аккаунта.
             </div>
           </div>
 
@@ -107,7 +153,7 @@ export default function SettingsPage() {
                           <span style={{ width: 7, height: 7, borderRadius: 99, background: 'var(--green)', display: 'inline-block' }} />
                           Синхронизация: {conn.syncedAt ? timeAgo(Math.floor((Date.now() - conn.syncedAt) / 1000)) : '…'}
                         </span>
-                        <button className="btn btn-danger btn-sm" onClick={() => disconnect(p.id)}>
+                        <button className="btn btn-danger btn-sm" onClick={() => void disconnect(p.id)} disabled={busy === p.id}>
                           <X size={13} />
                           Отключить
                         </button>
@@ -115,18 +161,19 @@ export default function SettingsPage() {
                     ) : (
                       <button
                         className="btn btn-primary btn-sm"
-                        onClick={() => connect(p.id)}
-                        disabled={!p.fields.every((f) => (conn.credentials[f.key] ?? '').trim())}
+                        onClick={() => void connect(p.id)}
+                        disabled={busy === p.id || !(p.id === 'ozon' ? (conn.credentials.clientId ?? '').trim() && (conn.credentials.apiKey ?? '').trim() : (conn.credentials.apiKey ?? '').trim())}
                       >
                         <Check size={13} />
-                        Подключить
+                        {busy === p.id ? 'Проверка…' : 'Подключить'}
                       </button>
                     )}
                   </div>
                 </div>
 
-                <div className="conn-fields">
-                  {p.fields.map((f) => (
+                {connectionErrors[p.id] ? <div className="info-banner" role="alert">{connectionErrors[p.id]}</div> : null}
+              <div className="conn-fields">
+                  {p.fields.filter((f) => p.id === 'ozon' || f.key !== 'clientId').map((f) => (
                     <div className="field" key={f.key}>
                       <label>{f.label}</label>
                       <div style={{ position: 'relative' }}>
@@ -157,7 +204,7 @@ export default function SettingsPage() {
                     Документация API
                   </a>
                   {conn.connected ? (
-                    <button className="link" style={{ background: 'none', border: 0, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 6 }} onClick={() => syncNow(p.id)}>
+                    <button className="link" style={{ background: 'none', border: 0, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 6 }} onClick={() => void syncNow()}>
                       <RefreshCw size={13} />
                       Синхронизировать сейчас
                     </button>
@@ -172,7 +219,7 @@ export default function SettingsPage() {
             <div>
               <strong>Защита данных</strong>
               <br />
-              Ключи не сохраняются в localStorage. Пока клиентская авторизация не настроена, не вводите рабочие API-ключи в эту форму. Используйте ключи с минимально необходимыми правами.
+              Ключи не сохраняются в браузере: они передаются серверу только при подключении. Сервер хранит их в зашифрованном виде. Используйте ключи с минимально необходимыми правами.
             </div>
           </div>
 
