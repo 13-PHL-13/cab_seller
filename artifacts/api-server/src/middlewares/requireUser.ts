@@ -34,7 +34,7 @@ export async function requireUser(req: Request, res: Response, next: NextFunctio
     }
     req.userId = user.id;
     req.userEmail = user.email;
-    void db.update(sessionsTable).set({ lastSeenAt: new Date() }).where(eq(sessionsTable.id, session.id));
+    void db.update(sessionsTable).set({ lastSeenAt: new Date() }).where(eq(sessionsTable.id, session.id)).catch(() => undefined);
     next();
   } catch (error) {
     next(error);
