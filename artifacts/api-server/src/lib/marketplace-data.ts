@@ -164,24 +164,35 @@ async function requestWildberriesFunnel(
   from: string,
   to: string,
 ): Promise<Record<string, unknown>> {
-  return requestJson(
-    "https://seller-analytics-api.wildberries.ru/api/analytics/v3/sales-funnel/products",
-    {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: credentials.apiKey,
+  const allCards: unknown[] = [];
+  const pageSize = 1000;
+  const maxPages = 10;
+
+  for (let page = 0; page < maxPages; page += 1) {
+    const response = await requestJson(
+      "https://seller-analytics-api.wildberries.ru/api/analytics/v3/sales-funnel/products",
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: credentials.apiKey,
+        },
+        body: JSON.stringify({
+          selectedPeriod: { start: from, end: to },
+          nmIds: [],
+          skipDeletedNm: false,
+          orderBy: { field: "openCard", mode: "desc" },
+          limit: pageSize,
+          offset: page * pageSize,
+        }),
       },
-      body: JSON.stringify({
-        selectedPeriod: { start: from, end: to },
-        nmIds: [],
-        skipDeletedNm: false,
-        orderBy: { field: "openCard", mode: "desc" },
-        limit: 1000,
-        offset: 0,
-      }),
-    },
-  );
+    );
+    const cards = wildberriesCards(response);
+    allCards.push(...cards);
+    if (cards.length < pageSize) break;
+  }
+
+  return { data: { cards: allCards } };
 }
 
 async function requestWildberriesSales(
