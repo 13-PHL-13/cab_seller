@@ -34,6 +34,7 @@ export default function MarketplaceDetailPage() {
   return <>
     <div className="page-header"><div><h1>{name}</h1><div className="subtitle">Реальные данные API за 30 дней</div></div><div className="header-actions"><Link href="/marketplaces" className="btn btn-outline">Все площадки</Link><Link href="/settings" className="btn btn-outline">Настройки API</Link></div></div>
     {error ? <div className="info-banner" role="alert">{error}</div> : null}
+    {data?.partialErrors.map((item) => <div className="info-banner" role="status" key={item}>{item}</div>)}
     <div className="kpi-grid">
       {[["Выручка", formatMoney(revenue)], ["Заказы", formatNumber(funnel?.orders ?? 0)], ["Выкуплено, шт.", formatNumber(funnel?.purchases ?? 0)], ["Просмотры", formatNumber(funnel?.views ?? 0)]].map(([label, value]) => <div className="kpi-card" key={label}><div><div className="kpi-label">{label}</div><div className="kpi-value">{loading ? "…" : value}</div></div></div>)}
     </div>
