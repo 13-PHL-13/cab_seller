@@ -324,6 +324,11 @@ router.get("/marketplace/dashboard", async (req, res): Promise<void> => {
   const revenue = salesSeries.reduce((sum, day) => sum + day.totalRevenue, 0);
   const orders = funnels.reduce((sum, funnel) => sum + funnel.orders, 0);
   const units = funnels.reduce((sum, funnel) => sum + funnel.purchases, 0);
+  if (snapshots.has("ozon")) {
+    partialErrors.push(
+      "Ozon: API-метрика ordered_units не используется как число заказов или выкупов; эти показатели пока не включены в итог.",
+    );
+  }
   res.json(
     GetMarketplaceDashboardResponse.parse({
       period,
