@@ -1,8 +1,8 @@
 import { and, eq, gt, isNull } from "drizzle-orm";
 import { Router, type IRouter } from "express";
-import { db, emailVerificationTokensTable, sessionsTable, usersTable } from "@workspace/db";
+import { db, emailVerificationTokensTable, passwordResetTokensTable, sessionsTable, usersTable } from "@workspace/db";
 import { clearSessionCookie, createOpaqueToken, hashPassword, hashToken, normalizeEmail, readSessionCookie, sessionCookie, sessionExpiry, verifyPassword } from "../lib/auth";
-import { sendVerificationEmail } from "../lib/mailer";
+import { sendPasswordResetEmail, sendVerificationEmail } from "../lib/mailer";
 import { requireUser } from "../middlewares/requireUser";
 
 const router: IRouter = Router();
@@ -110,6 +110,59 @@ router.post("/auth/login", rateLimit, requireSameOrigin, async (req, res, next) 
     await db.update(usersTable).set({ lastLoginAt: new Date() }).where(eq(usersTable.id, user.id));
     res.setHeader("Set-Cookie", sessionCookie(token, Math.floor((expiresAt.getTime() - Date.now()) / 1000)));
     res.json({ user: { id: user.id, email: user.email } });
+  } catch (error) {
+    next(error);
+  }
+});
+
+
+router.post("/auth/forgot-password", rateLimit, requireSameOrigin, async (req, res, next) => {
+  try {
+    const email = typeof req.body?.email === "string" ? normalizeEmail(req.body.email) : "";
+    if (validEmail(email)) {
+      const [user] = await db.select({ id: usersTable.id, email: usersTable.email })
+        .from(usersTable).where(eq(usersTable.email, email)).limit(1);
+      if (user && user.email) {
+        const token = createOpaqueToken();
+        await db.insert(passwordResetTokensTable).values({
+          userId: user.id, tokenHash: hashToken(token), expiresAt: new Date(Date.now() + 30 * 60_000),
+        });
+        try {
+          await sendPasswordResetEmail(user.email, token);
+        } catch (mailError) {
+          req.log.error({ err: mailError }, "Password reset email delivery failed");
+        }
+      }
+    }
+    res.json({ message: "Если аккаунт с таким адресом существует, мы отправили инструкцию по восстановлению пароля." });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.post("/auth/reset-password", rateLimit, requireSameOrigin, async (req, res, next) => {
+  try {
+    const token = typeof req.body?.token === "string" ? req.body.token : "";
+    const password = typeof req.body?.password === "string" ? req.body.password : "";
+    if (!token || token.length > 256 || password.length < 12 || password.length > 128) {
+      res.status(400).json({ error: "Ссылка недействительна или пароль не соответствует требованиям." });
+      return;
+    }
+    const [record] = await db.select().from(passwordResetTokensTable).where(
+      and(eq(passwordResetTokensTable.tokenHash, hashToken(token)), gt(passwordResetTokensTable.expiresAt, new Date()), isNull(passwordResetTokensTable.usedAt)),
+    ).limit(1);
+    if (!record) {
+      res.status(400).json({ error: "Ссылка недействительна или устарела. Запросите восстановление повторно." });
+      return;
+    }
+    const passwordHash = await hashPassword(password);
+    await db.transaction(async (tx) => {
+      await tx.update(usersTable).set({ passwordHash, updatedAt: new Date() }).where(eq(usersTable.id, record.userId));
+      await tx.update(passwordResetTokensTable).set({ usedAt: new Date() }).where(eq(passwordResetTokensTable.userId, record.userId));
+      await tx.delete(sessionsTable).where(eq(sessionsTable.userId, record.userId));
+    });
+    res.setHeader("Set-Cookie", clearSessionCookie());
+    res.json({ message: "Пароль изменён. Теперь войдите с новым паролем." });
   } catch (error) {
     next(error);
   }
