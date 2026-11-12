@@ -1,86 +1,68 @@
-import { Link } from 'wouter';
-import { ArrowUpRight, Plug, RefreshCw } from 'lucide-react';
-import { PLATFORMS, periodKpis, type PlatformId } from '@/data/mock';
-import { formatMoney, formatNumber, timeAgo } from '@/lib/format';
-import { loadSettings } from '@/data/settings';
-import { PlatformChip, Delta } from '@/components/ui-bits';
+import { useEffect, useState } from "react";
+import { Link } from "wouter";
+import { Plug, RefreshCw } from "lucide-react";
+import { formatMoney, formatNumber } from "@/lib/format";
+import { getMarketplaceConnections, getMarketplaceDashboard, formatApiError } from "@/lib/marketplace-api";
+import type { MarketplaceConnection, MarketplaceDashboard } from "@/lib/marketplace-api";
 
-const PERIOD_DAYS = 30;
-
-/** Страница «Маркетплейсы» — обзор всех интегрированных площадок. */
 export default function MarketplacesPage() {
-  const settings = loadSettings();
+  const [connections, setConnections] = useState<MarketplaceConnection[]>([]);
+  const [dashboard, setDashboard] = useState<MarketplaceDashboard | null>(null);
+  const [error, setError] = useState("");
+  const [loading, setLoading] = useState(true);
+
+  const refresh = async () => {
+    setLoading(true);
+    setError("");
+    try {
+      const [connectionRows, stats] = await Promise.all([
+        getMarketplaceConnections(),
+        getMarketplaceDashboard("30d", "all"),
+      ]);
+      setConnections(connectionRows);
+      setDashboard(stats);
+    } catch (reason) {
+      setError(formatApiError(reason));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => { void refresh(); }, []);
 
   return (
     <>
       <div className="page-header">
-        <div>
-          <h1>Маркетплейсы</h1>
-          <div className="subtitle">Интегрированные торговые площадки и их показатели за месяц</div>
-        </div>
+        <div><h1>Маркетплейсы</h1><div className="subtitle">Состояние подключений и реальные показатели за 30 дней</div></div>
         <div className="header-actions">
-          <Link href="/settings" className="btn btn-outline">
-            <Plug size={15} />
-            Подключить площадку
-          </Link>
+          <button className="btn btn-outline btn-sm" onClick={() => void refresh()} disabled={loading}><RefreshCw size={14} /> Обновить</button>
+          <Link href="/settings" className="btn btn-outline"><Plug size={15} /> Настроить API</Link>
         </div>
       </div>
-
+      {error ? <div className="info-banner" role="alert">{error}</div> : null}
       <div className="grid-2-even">
-        {PLATFORMS.map((p) => {
-          const k = periodKpis([p.id as PlatformId], PERIOD_DAYS);
-          const conn = settings.connections[p.id];
-          const connected = conn?.connected ?? false;
-          return (
-            <div className="card mp-card" key={p.id}>
-              <div className="mp-head">
-                <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
-                  <PlatformChip id={p.id} />
-                  <div>
-                    <div style={{ fontWeight: 800, fontSize: 15 }}>{p.name}</div>
-                    <span className={`badge ${connected ? 'badge-green' : 'badge-gray'}`} style={{ marginTop: 3 }}>
-                      {connected ? 'Активен' : 'Не подключён'}
-                    </span>
-                  </div>
-                </div>
-                {connected ? (
-                  <span className="badge badge-blue" style={{ gap: 6 }}>
-                    <RefreshCw size={11} />
-                    {conn.syncedAt ? `Синхр. ${timeAgo(Math.floor((Date.now() - conn.syncedAt) / 1000))}` : 'Синхронизация…'}
-                  </span>
-                ) : null}
+        {(["ozon", "wildberries"] as const).map((id) => {
+          const connection = connections.find((item) => item.marketplace === id);
+          const funnel = dashboard?.funnels.find((item) => item.marketplace === id);
+          const revenue = dashboard?.salesSeries.reduce((sum, day) => sum + (id === "ozon" ? day.ozonRevenue : day.wildberriesRevenue), 0) ?? 0;
+          const connected = connection?.connected ?? false;
+          return <div className="card mp-card" key={id}>
+            <div className="mp-head">
+              <div><div style={{ fontWeight: 800, fontSize: 17 }}>{id === "ozon" ? "Ozon" : "Wildberries"}</div>
+                <span className={`badge ${connected ? "badge-green" : "badge-gray"}`} style={{ marginTop: 5 }}>{connected ? "Подключён" : "Не подключён"}</span>
               </div>
-              <div className="mp-stats">
-                <div className="mp-stat">
-                  <div className="l">Выручка</div>
-                  <div className="v">{formatMoney(k.revenue.value)}</div>
-                  <Delta value={k.revenue.change} />
-                </div>
-                <div className="mp-stat">
-                  <div className="l">Заказы</div>
-                  <div className="v">{formatNumber(k.orders.value)}</div>
-                  <Delta value={k.orders.change} />
-                </div>
-                <div className="mp-stat">
-                  <div className="l">Факт. продажи</div>
-                  <div className="v">{formatMoney(k.boughtRevenue.value)}</div>
-                  <Delta value={k.boughtRevenue.change} />
-                </div>
-              </div>
-              {connected ? (
-                <Link href={`/marketplace/${p.id}`} className="btn btn-primary" style={{ alignSelf: 'flex-start' }}>
-                  Открыть площадку
-                  <ArrowUpRight size={15} />
-                </Link>
-              ) : (
-                <Link href="/settings" className="btn btn-outline" style={{ alignSelf: 'flex-start' }}>
-                  Подключить по API
-                </Link>
-              )}
+              {connection?.lastSyncAt ? <span className="badge badge-blue">Обновлено {new Date(connection.lastSyncAt).toLocaleString("ru-RU")}</span> : null}
             </div>
-          );
+            <div className="mp-stats">
+              <div className="mp-stat"><div className="l">Выручка</div><div className="v">{loading ? "…" : formatMoney(revenue)}</div></div>
+              <div className="mp-stat"><div className="l">Заказы</div><div className="v">{formatNumber(funnel?.orders ?? 0)}</div></div>
+              <div className="mp-stat"><div className="l">Выкуплено, шт.</div><div className="v">{formatNumber(funnel?.purchases ?? 0)}</div></div>
+            </div>
+            <Link href="/settings" className="btn btn-outline" style={{ alignSelf: "flex-start" }}>{connected ? "Управлять подключением" : "Подключить по API"}</Link>
+          </div>;
         })}
       </div>
+      <div className="info-banner">В этом разделе отображаются только площадки, для которых реализована серверная интеграция. Яндекс Маркет и Мегамаркет пока не подключены.</div>
     </>
   );
 }
