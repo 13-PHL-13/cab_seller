@@ -129,11 +129,14 @@ export function loadSettings(): AppSettings {
       credentials: {},
       syncedAt: null,
     }]));
-    return {
+    const safeSettings: AppSettings = {
       connections,
       profile: { ...DEFAULT_SETTINGS.profile, ...(parsed.profile ?? {}) },
       notifications: { ...DEFAULT_SETTINGS.notifications, ...(parsed.notifications ?? {}) },
     };
+    // Rewrite legacy storage immediately so previously saved API keys are erased.
+    saveSettings(safeSettings);
+    return safeSettings;
   } catch {
     return DEFAULT_SETTINGS;
   }
