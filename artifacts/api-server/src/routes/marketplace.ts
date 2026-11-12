@@ -304,6 +304,7 @@ router.get("/marketplace/dashboard", async (req, res): Promise<void> => {
   });
 
   const funnels = targets
+    .filter((target) => target !== "ozon")
     .map((target) => {
       const snapshot = snapshots.get(target);
       if (!snapshot) return null;
