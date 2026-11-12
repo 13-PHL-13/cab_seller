@@ -88,6 +88,11 @@ router.post("/auth/verify-email", rateLimit, requireSameOrigin, async (req, res,
       return;
     }
     await db.transaction(async (tx) => {
+      const consumed = await tx.update(emailVerificationTokensTable)
+        .set({ usedAt: new Date() })
+        .where(and(eq(emailVerificationTokensTable.id, record.id), isNull(emailVerificationTokensTable.usedAt), gt(emailVerificationTokensTable.expiresAt, new Date())))
+        .returning({ id: emailVerificationTokensTable.id });
+      if (!consumed.length) throw new Error("Verification token was already consumed.");
       await tx.update(usersTable).set({ emailVerifiedAt: new Date() }).where(eq(usersTable.id, record.userId));
       await tx.update(emailVerificationTokensTable).set({ usedAt: new Date() }).where(eq(emailVerificationTokensTable.userId, record.userId));
     });
@@ -130,6 +135,7 @@ router.post("/auth/forgot-password", rateLimit, requireSameOrigin, async (req, r
       const [user] = await db.select({ id: usersTable.id, email: usersTable.email })
         .from(usersTable).where(eq(usersTable.email, email)).limit(1);
       if (user && user.email) {
+        await db.update(passwordResetTokensTable).set({ usedAt: new Date() }).where(and(eq(passwordResetTokensTable.userId, user.id), isNull(passwordResetTokensTable.usedAt)));
         const token = createOpaqueToken();
         await db.insert(passwordResetTokensTable).values({
           userId: user.id, tokenHash: hashToken(token), expiresAt: new Date(Date.now() + 30 * 60_000),
@@ -164,6 +170,11 @@ router.post("/auth/reset-password", rateLimit, requireSameOrigin, async (req, re
     }
     const passwordHash = await hashPassword(password);
     await db.transaction(async (tx) => {
+      const consumed = await tx.update(passwordResetTokensTable)
+        .set({ usedAt: new Date() })
+        .where(and(eq(passwordResetTokensTable.id, record.id), isNull(passwordResetTokensTable.usedAt), gt(passwordResetTokensTable.expiresAt, new Date())))
+        .returning({ id: passwordResetTokensTable.id });
+      if (!consumed.length) throw new Error("Password reset token was already consumed.");
       await tx.update(usersTable).set({ passwordHash, updatedAt: new Date() }).where(eq(usersTable.id, record.userId));
       await tx.update(passwordResetTokensTable).set({ usedAt: new Date() }).where(eq(passwordResetTokensTable.userId, record.userId));
       await tx.delete(sessionsTable).where(eq(sessionsTable.userId, record.userId));
