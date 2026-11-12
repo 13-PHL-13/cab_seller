@@ -48,12 +48,12 @@ router.post("/auth/register", rateLimit, requireSameOrigin, async (req, res, nex
       res.status(400).json({ error: "Укажите корректный email и пароль длиной от 12 до 128 символов." });
       return;
     }
+    const passwordHash = await hashPassword(password);
     const existing = await db.select({ id: usersTable.id }).from(usersTable).where(eq(usersTable.email, email)).limit(1);
     if (existing.length) {
-      res.status(409).json({ error: "Не удалось создать аккаунт с указанными данными. Возможно, адрес уже зарегистрирован." });
+      res.status(202).json({ message: "Если адрес доступен для регистрации, письмо отправлено. Если у вас уже есть аккаунт, войдите или восстановите пароль." });
       return;
     }
-    const passwordHash = await hashPassword(password);
     const [user] = await db.insert(usersTable).values({ email, passwordHash, status: "active" }).returning({ id: usersTable.id });
     const token = createOpaqueToken();
     await db.insert(emailVerificationTokensTable).values({
@@ -67,7 +67,7 @@ router.post("/auth/register", rateLimit, requireSameOrigin, async (req, res, nex
       res.status(503).json({ error: "Не удалось отправить письмо. Проверьте настройки почты и попробуйте снова." });
       return;
     }
-    res.status(201).json({ message: "Аккаунт создан. Проверьте почту и подтвердите email." });
+    res.status(202).json({ message: "Если адрес доступен для регистрации, письмо отправлено. Если у вас уже есть аккаунт, войдите или восстановите пароль." });
   } catch (error) {
     next(error);
   }
@@ -109,11 +109,11 @@ router.post("/auth/login", rateLimit, requireSameOrigin, async (req, res, next) 
     const [user] = await db.select().from(usersTable).where(eq(usersTable.email, email)).limit(1);
     const matches = await verifyPassword(password, user?.passwordHash ?? dummyHash).catch(() => false);
     if (!user || !matches || user.status !== "active") {
-      res.status(401).json({ error: "Неверный email или пароль." });
+      res.status(401).json({ error: "Неверный email или пароль. Если вы только зарегистрировались, подтвердите адрес по ссылке из письма." });
       return;
     }
     if (!user.emailVerifiedAt) {
-      res.status(403).json({ error: "Сначала подтвердите email по ссылке из письма." });
+      res.status(401).json({ error: "Неверный email или пароль. Если вы только зарегистрировались, подтвердите адрес по ссылке из письма." });
       return;
     }
     const token = createOpaqueToken();
@@ -140,11 +140,9 @@ router.post("/auth/forgot-password", rateLimit, requireSameOrigin, async (req, r
         await db.insert(passwordResetTokensTable).values({
           userId: user.id, tokenHash: hashToken(token), expiresAt: new Date(Date.now() + 30 * 60_000),
         });
-        try {
-          await sendPasswordResetEmail(user.email, token);
-        } catch (mailError) {
+        void sendPasswordResetEmail(user.email, token).catch((mailError) => {
           req.log.error({ err: mailError }, "Password reset email delivery failed");
-        }
+        });
       }
     }
     res.json({ message: "Если аккаунт с таким адресом существует, мы отправили инструкцию по восстановлению пароля." });
