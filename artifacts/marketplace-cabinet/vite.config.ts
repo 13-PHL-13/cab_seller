@@ -18,6 +18,6 @@ export default defineConfig({
   },
   root: path.resolve(import.meta.dirname),
   build: { outDir: path.resolve(import.meta.dirname, "dist/public"), emptyOutDir: true },
-  server: { port, strictPort: false, host: true, allowedHosts: true, fs: { strict: true } },
+  server: {\n    port, strictPort: false, host: true, allowedHosts: true,\n    proxy: { "/api": { target: process.env.API_PROXY_TARGET || "http://127.0.0.1:3001", changeOrigin: false } },\n    fs: { strict: true },\n  },
   preview: { port, host: true, allowedHosts: true },
 });
