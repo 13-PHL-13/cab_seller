@@ -61,5 +61,5 @@ export function clearSessionCookie(): string {
 export function readSessionCookie(cookieHeader?: string): string | null {
   const name = process.env.NODE_ENV === "production" ? "__Host-session" : "session";
   const item = cookieHeader?.split(";").map((part) => part.trim()).find((part) => part.startsWith(`${name}=`));
-  return item ? decodeURIComponent(item.slice(name.length + 1)) : null;
+  return item ? item.slice(name.length + 1) : null;
 }
