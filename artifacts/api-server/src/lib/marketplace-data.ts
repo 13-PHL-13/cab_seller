@@ -143,7 +143,9 @@ export async function getOzonSnapshot(
       date,
       revenue: asNumber(metrics[0]),
       orders: asNumber(metrics[1]),
-      units: asNumber(metrics[1]),
+      // Ozon's ordered_units metric is not a confirmed buyout metric.
+      // Keep purchases unavailable rather than reporting ordered units as buyouts.
+      units: 0,
       views: asNumber(metrics[2]),
       cartAdds: asNumber(metrics[3]),
     };
@@ -251,7 +253,7 @@ export async function getWildberriesSnapshot(
   for (const rawSale of sales) {
     const sale = asRecord(rawSale);
     const date = dateKey(sale["date"]);
-    if (!date || date > to || sale["isCancel"] === true) continue;
+    if (!date || date < from || date > to || sale["isCancel"] === true) continue;
     const point = snapshot.daily.get(date) ?? {
       date,
       revenue: 0,
@@ -263,7 +265,8 @@ export async function getWildberriesSnapshot(
     const price = asNumber(
       sale["finishedPrice"] ?? sale["priceWithDisc"] ?? sale["retailPrice"],
     );
-    const quantity = Math.max(1, asNumber(sale["quantity"]));
+    const quantity = asNumber(sale["quantity"]);
+    if (quantity <= 0 || price < 0) continue;
     point.revenue += price * quantity;
     point.orders += quantity;
     point.units += quantity;
