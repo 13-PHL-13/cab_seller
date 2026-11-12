@@ -1,4 +1,4 @@
-import express, { type Express } from "express";
+import express, { type Express, type NextFunction, type Request, type Response } from "express";
 import pinoHttp from "pino-http";
 import router from "./routes";
 import { logger } from "./lib/logger";
@@ -21,7 +21,7 @@ app.use(express.json({ limit: "32kb" }));
 app.use(express.urlencoded({ extended: true, limit: "32kb" }));
 app.use("/api", router);
 
-app.use((error: unknown, req: express.Request, res: express.Response, next: express.NextFunction) => {
+app.use((error: unknown, req: Request, res: Response, next: NextFunction) => {
   if (res.headersSent) {
     next(error);
     return;
