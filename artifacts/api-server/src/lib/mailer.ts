@@ -65,7 +65,6 @@ async function sendMail(email: string, subjectText: string, paragraphs: string[]
     const accepted = await read();
     if (!accepted.startsWith("250")) throw new Error("SMTP server did not accept the email.");
     socket.write("QUIT\r\n");
-    await read().catch(() => "");
   } finally {
     socket.end();
   }
