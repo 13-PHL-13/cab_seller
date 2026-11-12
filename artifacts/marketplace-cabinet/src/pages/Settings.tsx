@@ -27,15 +27,8 @@ export default function SettingsPage() {
     });
   };
 
-  const connect = (pid: string) => {
-    const conn = settings.connections[pid];
-    update({
-      ...settings,
-      connections: {
-        ...settings.connections,
-        [pid]: { ...conn, connected: true, syncedAt: Date.now() },
-      },
-    });
+  const connect = (_pid: string) => {
+    window.alert('Подключение пока недоступно в интерфейсе: требуется настроить клиентскую аутентификацию. Ключи не отправлялись и не сохранены.');
   };
 
   const disconnect = (pid: string) => {
@@ -49,15 +42,8 @@ export default function SettingsPage() {
     });
   };
 
-  const syncNow = (pid: string) => {
-    const conn = settings.connections[pid];
-    update({
-      ...settings,
-      connections: {
-        ...settings.connections,
-        [pid]: { ...conn, syncedAt: Date.now() },
-      },
-    });
+  const syncNow = (_pid: string) => {
+    window.alert('Синхронизация недоступна: сначала необходимо подключить авторизованный API-клиент.');
   };
 
   const toggleNotification = (key: keyof AppSettings['notifications']) => {
@@ -98,7 +84,7 @@ export default function SettingsPage() {
             <div>
               <strong>Как подключить API</strong>
               <br />
-              Получите API-ключ в личном кабинете маркетплейса и введите его здесь. После подключения данные будут автоматически синхронизироваться.
+              Получите API-ключ в личном кабинете маркетплейса и введите его здесь. Поддерживаются серверные подключения Ozon и Wildberries. Клиентская авторизация ещё не настроена, поэтому подключение и синхронизация из этого интерфейса временно отключены.
             </div>
           </div>
 
@@ -186,7 +172,7 @@ export default function SettingsPage() {
             <div>
               <strong>Защита данных</strong>
               <br />
-              Ключи хранятся только локально в этом демо-режиме. В рабочей версии секретные ключи передаются на сервер по защищённому каналу и не сохраняются в браузере. Используйте ключи с минимально необходимыми правами.
+              Ключи не сохраняются в localStorage. Пока клиентская авторизация не настроена, не вводите рабочие API-ключи в эту форму. Используйте ключи с минимально необходимыми правами.
             </div>
           </div>
 
