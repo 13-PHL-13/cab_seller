@@ -1,5 +1,5 @@
 import { createRoot } from 'react-dom/client';
-import { ClerkProvider, SignedIn, SignedOut, SignInButton, UserButton } from '@clerk/react';
+import { ClerkProvider, Show, SignInButton, UserButton } from '@clerk/react';
 
 import App from './App';
 import { ErrorBoundary } from '@/components/error-boundary';
@@ -16,11 +16,11 @@ function Root() {
   }
 
   return <ClerkProvider publishableKey={publishableKey} proxyUrl="/api/__clerk">
-    <SignedIn>
+    <Show when="signed-in">
       <div style={{ position: 'fixed', right: 20, top: 16, zIndex: 50 }}><UserButton /></div>
       <ErrorBoundary><App /></ErrorBoundary>
-    </SignedIn>
-    <SignedOut>
+    </Show>
+    <Show when="signed-out">
       <div className="empty-state" style={{ minHeight: '100vh', display: 'flex', justifyContent: 'center', alignItems: 'center' }}>
         <div>
           <h1>Навигатор продаж</h1>
@@ -28,7 +28,7 @@ function Root() {
           <SignInButton mode="modal"><button className="btn btn-primary">Войти</button></SignInButton>
         </div>
       </div>
-    </SignedOut>
+    </Show>
   </ClerkProvider>;
 }
 
