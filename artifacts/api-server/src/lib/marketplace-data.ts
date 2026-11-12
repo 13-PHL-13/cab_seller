@@ -279,7 +279,7 @@ export async function getWildberriesSnapshot(
     const quantity = asNumber(sale["quantity"]);
     if (quantity <= 0 || price < 0) continue;
     point.revenue += price * quantity;
-    point.orders += quantity;
+    point.orders += 1;
     point.units += quantity;
     snapshot.daily.set(date, point);
   }
