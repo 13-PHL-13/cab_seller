@@ -32,7 +32,7 @@ function record(value: unknown): UnknownRecord {
 function amount(value: unknown): number {
   if (typeof value === "number") return Number.isFinite(value) ? value : 0;
   if (typeof value !== "string") return 0;
-  const parsed = Number(value.trim().replace(/\\s/g, "").replace(",", "."));
+  const parsed = Number(value.trim().replace(/\s/g, "").replace(",", "."));
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
