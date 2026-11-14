@@ -31,3 +31,21 @@
 - Добавить дневную историю заказов и поддержку нескольких магазинов.
 - Подключить реальную модель ИИ отдельно, с проверкой доступа только к данным текущего пользователя.
 - Провести интеграционные тесты PostgreSQL и owner isolation до production.
+
+
+## Финансовый этап: Wildberries (первый адаптер)
+
+- Добавлен серверный endpoint `GET /api/marketplace/finance/wildberries?from=YYYY-MM-DD&to=YYYY-MM-DD`.
+- Endpoint требует сессию пользователя, ищет подключение только по `ownerId`, расшифровывает ключ на сервере и не возвращает секреты.
+- Запрашивается новый Finance API Wildberries: `POST https://finance-api.wildberries.ru/api/finance/v1/sales-reports/detailed`.
+- Запрос выполняется вручную из страницы «Финансы», без фонового polling. Диапазон ограничен 31 днём; размер одной выборки — до 100 000 строк.
+- UI показывает сырые суммы выбранных полей отчёта: `retailAmount`, `ppvzForPay`, `deliveryRub`, `storageFee`, `acceptance`, `penalty`, `additionalPayment`, `deduction`, `acquiringFee`, `ppvzReward`. Суммы агрегируются без смены знака из ответа API.
+- Если получено 100 000 строк, результат помечается как потенциально неполный. Автоматическая пагинация не выполняется, так как финансовый API ограничивает частоту запросов.
+- API-ключ должен иметь права категории «Финансы». Проверка подключения на текущем этапе подтверждает аналитические права отдельно; наличие Finance scope проверяется только реальным запросом отчёта.
+- Отчёт реализации не называется чистой прибылью или суммой ближайшей выплаты. Себестоимость, налоги и рекламные расходы в нём не рассчитываются.
+- Ozon financial adapter не включён: старые `/v3/finance/transaction/list` и `totals` отключены 8 сентября 2026 года. Для новой интеграции необходимо реализовать последовательный вызов `/v1/finance/accrual/postings`, `/types` и `/by-day` после проверки актуальных контрактов.
+
+### Документация API, проверенная 14 ноября 2026
+- Ozon for dev, изменение финансовых методов от 24.08.2026: https://dev.ozon.ru/news/783-Izmeneniia-v-metodakh-dlia-raboty-s-finansovymi-otchetami-v-Seller-API/
+- Официальный канал WB API, новые методы отчётов реализации: https://t.me/s/wb_api_notifications/380
+- Документация WB Finance API: https://dev.wildberries.ru/docs/openapi/financial-reports-and-accounting
