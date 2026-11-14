@@ -124,3 +124,29 @@ export function getWildberriesFinanceReport(
   const query = new URLSearchParams({ from, to });
   return apiRequest(`/api/marketplace/finance/wildberries?${query.toString()}`);
 }
+
+
+export interface OzonFinanceReport {
+  marketplace: "ozon";
+  currency: string | null;
+  from: string;
+  to: string;
+  totals: {
+    accrued: number;
+    posting: number;
+    item: number;
+    nonItem: number;
+    containerFees: number;
+    other: number;
+    accrualsCount: number;
+    missingAmountRows: number;
+  };
+}
+
+export function getOzonFinanceReport(
+  from: string,
+  to: string,
+): Promise<OzonFinanceReport> {
+  const query = new URLSearchParams({ from, to });
+  return apiRequest(`/api/marketplace/finance/ozon?${query.toString()}`);
+}
