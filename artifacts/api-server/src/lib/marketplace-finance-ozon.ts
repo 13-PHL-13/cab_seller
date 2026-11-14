@@ -142,7 +142,7 @@ export async function getOzonFinanceReport(
   to: string,
 ): Promise<OzonFinanceResult> {
   const rows: unknown[] = [];
-  const maxPagesPerDay = 200;
+  const maxPagesPerDay = 20;\n  let totalPages = 0;
 
   // Ozon explicitly requires sequential requests for its new accrual methods.
   for (const date of datesInRange(from, to)) {
