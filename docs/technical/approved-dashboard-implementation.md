@@ -49,3 +49,20 @@
 - Ozon for dev, изменение финансовых методов от 24.08.2026: https://dev.ozon.ru/news/783-Izmeneniia-v-metodakh-dlia-raboty-s-finansovymi-otchetami-v-Seller-API/
 - Официальный канал WB API, новые методы отчётов реализации: https://t.me/s/wb_api_notifications/380
 - Документация WB Finance API: https://dev.wildberries.ru/docs/openapi/financial-reports-and-accounting
+
+
+## Финансовый этап: Ozon (второй адаптер)
+
+- Добавлен owner-scoped endpoint `GET /api/marketplace/finance/ozon?from=YYYY-MM-DD&to=YYYY-MM-DD`.
+- Используется новый `POST https://api-seller.ozon.ru/v1/finance/accrual/by-day`; устаревшие `/v3/finance/transaction/list` и `totals` не вызываются.
+- По контракту by-day принимает одну дату и возвращает `accruals` плюс `last_id`; сервер последовательно перебирает даты и страницы, не распараллеливает запросы.
+- Период ограничен 7 днями, общее число страниц ограничено 50, число страниц на дату — 20. При повторе курсора или достижении предела запрос завершается ошибкой, чтобы не выдавать частичный отчёт за полный.
+- Суммируется `total_amount.amount` ровно один раз на запись. Разбивка по `accrued_category`: `POSTING`, `ITEM`, `NON_ITEM`, `CONTAINER_FEES`, неизвестные категории — `other`. Суммы сохраняют знак, валюта берётся из ответа.
+- Пропуски `total_amount.amount` считаются отдельно и не включаются в итог.
+- UI выполняет выгрузку только вручную. Результат не называется чистой прибылью или суммой выплаты.
+- Unit tests проверяют разбиение по категориям, отрицательные суммы, неизвестные категории и отсутствующие суммы.
+
+### Дополнительные источники контракта Ozon
+- Официальное изменение API от 24.08.2026: https://dev.ozon.ru/news/783-Izmeneniia-v-metodakh-dlia-raboty-s-finansovymi-otchetami-v-Seller-API/
+- Текущая схема новых методов (Go SDK, опубликован 12.11.2026): https://pkg.go.dev/github.com/QuoVadis86/go-ozon-sdk/beta
+- Официальное обсуждение новых методов начислений: https://dev.ozon.ru/community/2008-Novye-beta-metody-dlia-polucheniia-nachislenii/
