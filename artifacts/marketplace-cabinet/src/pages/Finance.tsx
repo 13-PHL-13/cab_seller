@@ -1,6 +1,5 @@
 import { useState, type FormEvent } from "react";
 import { AlertTriangle, Info, RefreshCw, Wallet } from "lucide-react";
-import { Link } from "wouter";
 import {
   formatApiError,
   getWildberriesFinanceReport,
