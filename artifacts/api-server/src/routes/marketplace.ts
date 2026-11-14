@@ -1,3 +1,4 @@
+import { getOzonFinanceReport } from "../lib/marketplace-finance-ozon";
 import { getWildberriesFinanceReport } from "../lib/marketplace-finance";
 import {
   ConnectOzonBody,
@@ -401,6 +402,59 @@ router.get("/marketplace/finance/wildberries", async (req, res): Promise<void> =
     res.json(report);
   } catch (error) {
     req.log.warn({ marketplace: "wildberries" }, "Finance report request failed");
+    res.status(502).json({ error: errorMessage(error) });
+  }
+});
+
+
+router.get("/marketplace/finance/ozon", async (req, res): Promise<void> => {
+  const ownerId = userIdFromRequest(req);
+  const from = typeof req.query.from === "string" ? req.query.from : "";
+  const to = typeof req.query.to === "string" ? req.query.to : "";
+  const validDate = (value: string) => {
+    if (!/^\\d{4}-\\d{2}-\\d{2}$/.test(value)) return false;
+    const parsed = new Date(`${value}T00:00:00.000Z`);
+    return !Number.isNaN(parsed.getTime()) && parsed.toISOString().slice(0, 10) === value;
+  };
+
+  if (!validDate(from) || !validDate(to) || from > to) {
+    res.status(400).json({ error: "Укажите корректные даты начала и окончания отчёта." });
+    return;
+  }
+
+  const days = Math.floor(
+    (Date.parse(`${to}T00:00:00.000Z`) - Date.parse(`${from}T00:00:00.000Z`))
+      / 86_400_000,
+  ) + 1;
+  if (days > 31) {
+    res.status(400).json({ error: "Для первого этапа финансовый отчёт Ozon можно запросить максимум за 31 день." });
+    return;
+  }
+
+  const connection = await findConnection(ownerId, "ozon");
+  if (!connection) {
+    res.status(404).json({ error: "Сначала подключите Ozon в настройках API." });
+    return;
+  }
+
+  try {
+    const credentials = decryptCredentials<{ clientId: string; apiKey: string }>(
+      connection.credentialsCiphertext,
+    );
+    const report = await getOzonFinanceReport(credentials, from, to);
+    await db
+      .update(marketplaceConnectionsTable)
+      .set({ lastSyncAt: new Date() })
+      .where(
+        and(
+          eq(marketplaceConnectionsTable.id, connection.id),
+          eq(marketplaceConnectionsTable.ownerId, ownerId),
+        ),
+      );
+    req.log.info({ marketplace: "ozon", accruals: report.totals.accrualsCount }, "Finance report loaded");
+    res.json(report);
+  } catch (error) {
+    req.log.warn({ marketplace: "ozon" }, "Finance report request failed");
     res.status(502).json({ error: errorMessage(error) });
   }
 });
