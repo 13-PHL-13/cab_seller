@@ -142,15 +142,23 @@ export async function getOzonFinanceReport(
   to: string,
 ): Promise<OzonFinanceResult> {
   const rows: unknown[] = [];
-  const maxPagesPerDay = 20;\n  let totalPages = 0;
+  const maxPagesPerDay = 20;
+  let totalPages = 0;
 
   // Ozon explicitly requires sequential requests for its new accrual methods.
   for (const date of datesInRange(from, to)) {
     let lastId = "";
     for (let page = 0; page < maxPagesPerDay; page += 1) {
+      if (totalPages >= 50) {
+        throw new Error("Ozon: превышен общий лимит страниц финансового отчёта. Сузьте период.");
+      }
+      totalPages += 1;
       const result = await requestOzonAccrualDay(credentials, date, lastId);
       rows.push(...result.accruals);
-      if (!result.accruals.length || !result.lastId || result.lastId === lastId) break;
+      if (!result.accruals.length || !result.lastId) break;
+      if (result.lastId === lastId) {
+        throw new Error(`Ozon: курсор пагинации не изменился для даты ${date}. Отчёт не был завершён.`);
+      }
       lastId = result.lastId;
       if (page === maxPagesPerDay - 1) {
         throw new Error(`Ozon: превышен лимит страниц начислений за ${date}. Отчёт не был завершён.`);
