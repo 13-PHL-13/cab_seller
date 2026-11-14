@@ -1,5 +1,5 @@
 import { useEffect, useState, type FormEvent } from "react";
-import { Clock3, Pencil, Plus, Save, Trash2, X } from "lucide-react";
+import { Clock3, Pencil, Save, Trash2, X } from "lucide-react";
 import { deleteCogsProduct, getCogsHistory, listCogsProducts, saveCogsProduct, type CogsHistoryEntry, type CogsMarketplace, type CogsProduct } from "@/lib/cogs-api";
 
 const money = (value: string | number) => new Intl.NumberFormat("ru-RU", { style: "currency", currency: "RUB" }).format(Number(value));
@@ -50,7 +50,8 @@ export default function CogsPage() {
   async function toggleHistory(id: string) {
     if (historyOpen === id) { setHistoryOpen(null); return; }
     try {
-      setHistory((current) => ({ ...current, [id]: await getCogsHistory(id) }));
+      const entries = await getCogsHistory(id);
+      setHistory((current) => ({ ...current, [id]: entries }));
       setHistoryOpen(id);
     } catch (reason) { setError(reason instanceof Error ? reason.message : "Не удалось загрузить историю."); }
   }
