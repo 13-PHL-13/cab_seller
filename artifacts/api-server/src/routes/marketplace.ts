@@ -1,3 +1,4 @@
+import { getWildberriesFinanceReport } from "../lib/marketplace-finance";
 import {
   ConnectOzonBody,
   ConnectOzonResponse,
