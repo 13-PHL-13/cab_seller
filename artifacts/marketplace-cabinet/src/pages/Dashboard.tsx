@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import type { FormEvent } from "react";
 import { Link } from "wouter";
 import {
   Activity, Bot, ChevronDown, ChevronUp, CircleHelp, DollarSign,
@@ -110,7 +111,7 @@ export default function DashboardPage() {
   function toggleFinance(key: string) {
     setExpandedFinance((current) => current.includes(key) ? current.filter((item) => item !== key) : [...current, key]);
   }
-  function sendMessage(event: React.FormEvent<HTMLFormElement>) {
+  function sendMessage(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const question = chatInput.trim();
     if (!question) return;
