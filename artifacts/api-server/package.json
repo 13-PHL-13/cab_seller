@@ -8,7 +8,8 @@
     "build": "node ./build.mjs",
     "start": "node --env-file-if-exists=.env --enable-source-maps ./dist/index.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "node --experimental-strip-types --test src/lib/auth.test.ts"
+    "test": "node --experimental-strip-types --test src/lib/auth.test.ts src/lib/marketplace-finance.test.ts",
+    "seed:cogs:test": "node --experimental-strip-types --env-file-if-exists=.env ./scripts/seed-cogs-test-data.ts"
   },
   "dependencies": {
     "@workspace/api-zod": "workspace:*",
