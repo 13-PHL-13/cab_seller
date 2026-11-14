@@ -22,6 +22,10 @@ function parseBody(body: unknown): { marketplace: Marketplace; sellerSku: string
   return { marketplace: marketplace as Marketplace, sellerSku, productName, unitCost: Number(unitCost).toFixed(2) };
 }
 
+function validProductId(value: string): boolean {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(value);
+}
+
 function ownerId(req: import("express").Request): string {
   if (!req.userId) throw new Error("Authenticated user is missing");
   return req.userId;
@@ -37,6 +41,7 @@ router.get("/cogs", async (req, res): Promise<void> => {
 router.get("/cogs/:id/history", async (req, res): Promise<void> => {
   const userId = ownerId(req);
   const productId = req.params.id;
+  if (!validProductId(productId)) { res.status(400).json({ error: "Некорректный идентификатор товара." }); return; }
   const [product] = await db.select({ id: cogsProductsTable.id }).from(cogsProductsTable)
     .where(and(eq(cogsProductsTable.id, productId), eq(cogsProductsTable.ownerId, userId))).limit(1);
   if (!product) { res.status(404).json({ error: "Товар не найден." }); return; }
@@ -66,6 +71,7 @@ router.put("/cogs/:id", async (req, res): Promise<void> => {
   const parsed = parseBody(req.body);
   if (!parsed) { res.status(400).json({ error: "Проверьте площадку, артикул, название и себестоимость (неотрицательное число, до 2 знаков)." }); return; }
   const userId = ownerId(req);
+  if (!validProductId(req.params.id)) { res.status(400).json({ error: "Некорректный идентификатор товара." }); return; }
   const [existing] = await db.select().from(cogsProductsTable).where(and(
     eq(cogsProductsTable.id, req.params.id), eq(cogsProductsTable.ownerId, userId),
   )).limit(1);
@@ -87,6 +93,7 @@ router.put("/cogs/:id", async (req, res): Promise<void> => {
 });
 
 router.delete("/cogs/:id", async (req, res): Promise<void> => {
+  if (!validProductId(req.params.id)) { res.status(400).json({ error: "Некорректный идентификатор товара." }); return; }
   const deleted = await db.delete(cogsProductsTable).where(and(
     eq(cogsProductsTable.id, req.params.id), eq(cogsProductsTable.ownerId, ownerId(req)),
   )).returning({ id: cogsProductsTable.id });
