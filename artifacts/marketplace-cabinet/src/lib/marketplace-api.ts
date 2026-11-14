@@ -94,3 +94,33 @@ export function disconnectMarketplace(marketplace: MarketplaceId): Promise<void>
 export function formatApiError(error: unknown): string {
   return error instanceof Error ? error.message : "Неизвестная ошибка.";
 }
+
+
+export interface WildberriesFinanceReport {
+  marketplace: "wildberries";
+  currency: string | null;
+  from: string;
+  to: string;
+  rowsCount: number;
+  incomplete: boolean;
+  totals: {
+    retailAmount: number;
+    sellerPayout: number;
+    delivery: number;
+    storage: number;
+    acceptance: number;
+    penalties: number;
+    additionalPayments: number;
+    deductions: number;
+    acquiring: number;
+    marketplaceReward: number;
+  };
+}
+
+export function getWildberriesFinanceReport(
+  from: string,
+  to: string,
+): Promise<WildberriesFinanceReport> {
+  const query = new URLSearchParams({ from, to });
+  return apiRequest(`/api/marketplace/finance/wildberries?${query.toString()}`);
+}
