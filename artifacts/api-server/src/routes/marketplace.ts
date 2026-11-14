@@ -351,4 +351,54 @@ router.get("/marketplace/dashboard", async (req, res): Promise<void> => {
   );
 });
 
+
+router.get("/marketplace/finance/wildberries", async (req, res): Promise<void> => {
+  const ownerId = userIdFromRequest(req);
+  const from = typeof req.query.from === "string" ? req.query.from : "";
+  const to = typeof req.query.to === "string" ? req.query.to : "";
+  const validDate = (value: string) => /^\\d{4}-\\d{2}-\\d{2}$/.test(value)
+    && !Number.isNaN(Date.parse(`${value}T00:00:00.000Z`));
+
+  if (!validDate(from) || !validDate(to) || from > to) {
+    res.status(400).json({ error: "Укажите корректные даты начала и окончания отчёта." });
+    return;
+  }
+
+  const days = Math.floor(
+    (Date.parse(`${to}T00:00:00.000Z`) - Date.parse(`${from}T00:00:00.000Z`))
+      / 86_400_000,
+  ) + 1;
+  if (days > 31) {
+    res.status(400).json({ error: "Для первого этапа финансовый отчёт можно запросить максимум за 31 день." });
+    return;
+  }
+
+  const connection = await findConnection(ownerId, "wildberries");
+  if (!connection) {
+    res.status(404).json({ error: "Сначала подключите Wildberries в настройках API." });
+    return;
+  }
+
+  try {
+    const credentials = decryptCredentials<{ apiKey: string }>(
+      connection.credentialsCiphertext,
+    );
+    const report = await getWildberriesFinanceReport(credentials.apiKey, from, to);
+    await db
+      .update(marketplaceConnectionsTable)
+      .set({ lastSyncAt: new Date() })
+      .where(
+        and(
+          eq(marketplaceConnectionsTable.id, connection.id),
+          eq(marketplaceConnectionsTable.ownerId, ownerId),
+        ),
+      );
+    req.log.info({ marketplace: "wildberries", rows: report.rowsCount }, "Finance report loaded");
+    res.json(report);
+  } catch (error) {
+    req.log.warn({ marketplace: "wildberries" }, "Finance report request failed");
+    res.status(502).json({ error: errorMessage(error) });
+  }
+});
+
 export default router;
