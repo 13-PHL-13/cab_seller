@@ -56,3 +56,28 @@ test("ignores missing, malformed and non-finite amounts without producing NaN", 
   assert.equal(result.sellerPayout, 0);
   assert.equal(result.delivery, 0);
 });
+
+
+import { aggregateOzonAccruals } from "./marketplace-finance-ozon.ts";
+
+test("aggregates Ozon accrual totals by top-level category without double counting", () => {
+  const result = aggregateOzonAccruals([
+    { accrued_category: "POSTING", total_amount: { amount: "120.25", currency: "RUB" } },
+    { accrued_category: "ITEM", total_amount: { amount: "-10.10", currency: "RUB" } },
+    { accrued_category: "NON_ITEM", total_amount: { amount: "5", currency: "RUB" } },
+    { accrued_category: "CONTAINER_FEES", total_amount: { amount: "-2.15", currency: "RUB" } },
+    { accrued_category: "FUTURE_CATEGORY", total_amount: { amount: "1", currency: "RUB" } },
+    { accrued_category: "POSTING", total_amount: { currency: "RUB" } },
+  ]);
+
+  assert.deepEqual(result, {
+    accrued: 114,
+    posting: 120.25,
+    item: -10.1,
+    nonItem: 5,
+    containerFees: -2.15,
+    other: 1,
+    accrualsCount: 6,
+    missingAmountRows: 1,
+  });
+});
