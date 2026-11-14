@@ -430,3 +430,33 @@ router.get("/marketplace/finance/ozon", async (req, res): Promise<void> => {
     res.status(400).json({ error: "Для последовательной выгрузки Ozon выберите период не более 7 дней." });
     return;
   }
+
+  const connection = await findConnection(ownerId, "ozon");
+  if (!connection) {
+    res.status(404).json({ error: "Сначала подключите Ozon в настройках API." });
+    return;
+  }
+
+  try {
+    const credentials = decryptCredentials<{ clientId: string; apiKey: string }>(
+      connection.credentialsCiphertext,
+    );
+    const report = await getOzonFinanceReport(credentials, from, to);
+    await db
+      .update(marketplaceConnectionsTable)
+      .set({ lastSyncAt: new Date() })
+      .where(
+        and(
+          eq(marketplaceConnectionsTable.id, connection.id),
+          eq(marketplaceConnectionsTable.ownerId, ownerId),
+        ),
+      );
+    req.log.info({ marketplace: "ozon", accruals: report.totals.accrualsCount }, "Finance report loaded");
+    res.json(report);
+  } catch (error) {
+    req.log.warn({ marketplace: "ozon" }, "Finance report request failed");
+    res.status(502).json({ error: errorMessage(error) });
+  }
+});
+
+export default router;
