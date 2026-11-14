@@ -356,7 +356,7 @@ router.get("/marketplace/finance/wildberries", async (req, res): Promise<void> =
   const ownerId = userIdFromRequest(req);
   const from = typeof req.query.from === "string" ? req.query.from : "";
   const to = typeof req.query.to === "string" ? req.query.to : "";
-  const validDate = (value: string) => /^\\d{4}-\\d{2}-\\d{2}$/.test(value)
+  const validDate = (value: string) => /^\d{4}-\d{2}-\d{2}$/.test(value)
     && !Number.isNaN(Date.parse(`${value}T00:00:00.000Z`));
 
   if (!validDate(from) || !validDate(to) || from > to) {
