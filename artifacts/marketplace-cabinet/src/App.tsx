@@ -8,7 +8,7 @@ import MarketplaceDetailPage from '@/pages/MarketplaceDetail';
 import FunnelPage from '@/pages/Funnel';
 import AnalyticsPage from '@/pages/Analytics';
 import FinancePage from '@/pages/Finance';
-import CogsPage from '@/pages/Cogs';
+import ProductsPage from '@/pages/Products';
 import SettingsPage from '@/pages/Settings';
 import NotFoundPage from '@/pages/NotFound';
 import { ErrorBoundary } from '@/components/error-boundary';
@@ -20,7 +20,7 @@ const NAV = [
   { href: '/funnel', label: 'Воронка продаж', icon: Filter, match: (p: string) => p === '/funnel' },
   { href: '/analytics', label: 'Аналитика', icon: BarChart3, match: (p: string) => p === '/analytics' },
   { href: '/finance', label: 'Финансы', icon: Wallet, match: (p: string) => p === '/finance' },
-  { href: '/cogs', label: 'Себестоимость', icon: Package, match: (p: string) => p === '/cogs' },
+  { href: '/products', label: 'Товары', icon: Package, match: (p: string) => p === '/products' || p === '/cogs' },
   { href: '/settings', label: 'Настройки', icon: Settings, match: (p: string) => p === '/settings' },
 ];
 
@@ -49,7 +49,8 @@ export default function App() {
     <Route path="/funnel" component={FunnelPage} />
     <Route path="/analytics" component={AnalyticsPage} />
     <Route path="/finance" component={FinancePage} />
-    <Route path="/cogs" component={CogsPage} />
+    <Route path="/products" component={ProductsPage} />
+    <Route path="/cogs" component={ProductsPage} />
     <Route path="/settings" component={SettingsPage} />
     <Route component={NotFoundPage} />
   </Switch></Workspace></ErrorBoundary>;

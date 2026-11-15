@@ -7,19 +7,38 @@ const router: IRouter = Router();
 router.use("/cogs", requireUser);
 
 type Marketplace = "ozon" | "wildberries" | "both";
-function parseBody(body: unknown): { marketplace: Marketplace; sellerSku: string; productName: string; unitCost: string } | null {
+type ProductInput = {
+  marketplace: Marketplace; sellerSku: string; productName: string; unitCost: string;
+  characteristics: string; unit: string; countryOfOrigin: string; brand: string;
+  salePrice: string; description: string; images: string; videoUrl: string;
+};
+function parseBody(body: unknown): ProductInput | null {
   if (!body || typeof body !== "object") return null;
   const value = body as Record<string, unknown>;
   const marketplace = value.marketplace;
   const sellerSku = typeof value.sellerSku === "string" ? value.sellerSku.trim() : "";
   const productName = typeof value.productName === "string" ? value.productName.trim() : "";
+  const asText = (key: string, max: number) => typeof value[key] === "string" ? (value[key] as string).trim().slice(0, max) : "";
   const rawCost = value.unitCost;
   const unitCost = typeof rawCost === "number" ? String(rawCost) : typeof rawCost === "string" ? rawCost.trim() : "";
+  const rawPrice = value.salePrice;
+  const salePrice = typeof rawPrice === "number" ? String(rawPrice) : typeof rawPrice === "string" ? rawPrice.trim() : "0";
+  const rawImages = value.images;
+  const images = Array.isArray(rawImages) ? rawImages : [];
   if (!["ozon", "wildberries", "both"].includes(String(marketplace))) return null;
   if (!sellerSku || sellerSku.length > 120 || !productName || productName.length > 240) return null;
-  if (!/^(?:0|[1-9]\d{0,11})(?:\.\d{1,2})?$/.test(unitCost)) return null;
-  if (!Number.isFinite(Number(unitCost)) || Number(unitCost) < 0 || Number(unitCost) > 999999999999.99) return null;
-  return { marketplace: marketplace as Marketplace, sellerSku, productName, unitCost: Number(unitCost).toFixed(2) };
+  if (!/^(?:0|[1-9]\d{0,11})(?:\.\d{1,2})?$/.test(unitCost) || !Number.isFinite(Number(unitCost)) || Number(unitCost) < 0) return null;
+  if (!/^(?:0|[1-9]\d{0,11})(?:\.\d{1,2})?$/.test(salePrice) || !Number.isFinite(Number(salePrice)) || Number(salePrice) < 0) return null;
+  if (images.length > 5 || images.some((item) => typeof item !== "string" || item.length > 2048 || !/^https?:\/\//i.test(item))) return null;
+  const videoUrl = asText("videoUrl", 2048);
+  if (videoUrl && !/^https?:\/\//i.test(videoUrl)) return null;
+  return {
+    marketplace: marketplace as Marketplace, sellerSku, productName,
+    unitCost: Number(unitCost).toFixed(2), characteristics: asText("characteristics", 2000),
+    unit: asText("unit", 40) || "шт.", countryOfOrigin: asText("countryOfOrigin", 120),
+    brand: asText("brand", 160), salePrice: Number(salePrice).toFixed(2),
+    description: asText("description", 10000), images: JSON.stringify(images), videoUrl,
+  };
 }
 
 function validProductId(value: string): boolean {
