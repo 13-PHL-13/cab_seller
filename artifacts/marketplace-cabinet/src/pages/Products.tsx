@@ -13,7 +13,8 @@ const empty: ProductForm = {
   images: ["", "", "", "", ""], videoUrl: "",
 };
 const money = (value: string | number) => new Intl.NumberFormat("ru-RU", { style: "currency", currency: "RUB" }).format(Number(value || 0));
-function readImages(value?: string): string[] {
+function readImages(value?: string | string[]): string[] {
+  if (Array.isArray(value)) return value.slice(0, 5);
   try { const parsed = JSON.parse(value || "[]"); return Array.isArray(parsed) ? parsed.slice(0, 5).map(String) : []; }
   catch { return []; }
 }
