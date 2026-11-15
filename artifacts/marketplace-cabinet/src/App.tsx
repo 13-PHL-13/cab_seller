@@ -8,7 +8,6 @@ import MarketplaceDetailPage from '@/pages/MarketplaceDetail';
 import FunnelPage from '@/pages/Funnel';
 import AnalyticsPage from '@/pages/Analytics';
 import FinancePage from '@/pages/Finance';
-import CogsPage from '@/pages/Cogs';
 import ProductsPage from '@/pages/Products';
 import SettingsPage from '@/pages/Settings';
 import NotFoundPage from '@/pages/NotFound';
@@ -51,7 +50,7 @@ export default function App() {
     <Route path="/analytics" component={AnalyticsPage} />
     <Route path="/finance" component={FinancePage} />
     <Route path="/products" component={ProductsPage} />
-    <Route path="/cogs" component={CogsPage} />
+    <Route path="/cogs" component={ProductsPage} />
     <Route path="/settings" component={SettingsPage} />
     <Route component={NotFoundPage} />
   </Switch></Workspace></ErrorBoundary>;
