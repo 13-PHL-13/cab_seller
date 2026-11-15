@@ -9,6 +9,15 @@ export interface CogsProduct {
   currency: string;
   createdAt: string;
   updatedAt: string;
+  characteristics?: string;
+  unit?: string;
+  countryOfOrigin?: string;
+  brand?: string;
+  salePrice?: string;
+  description?: string;
+  images?: string;
+  videoUrl?: string;
+  publicationStatus?: string;
 }
 
 export interface CogsHistoryEntry {
