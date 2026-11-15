@@ -15,7 +15,7 @@ export interface CogsProduct {
   brand?: string;
   salePrice?: string;
   description?: string;
-  images?: string;
+  images?: string | string[];
   videoUrl?: string;
   publicationStatus?: string;
 }
