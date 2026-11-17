@@ -56,3 +56,6 @@ Thumbs.db
 # Replit
 .cache/
 .local/
+
+# Local product media uploads
+/artifacts/api-server/uploads/

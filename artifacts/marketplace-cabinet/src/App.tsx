@@ -24,7 +24,7 @@ const NAV = [
   { href: '/settings', label: 'Настройки', icon: Settings, match: (p: string) => p === '/settings' },
 ];
 
-function Workspace({ children }: { children: React.ReactNode }) {
+function Workspace({ children, userEmail, onLogout }: { children: React.ReactNode; userEmail: string; onLogout: () => void }) {
   const [location] = useLocation();
   const [open, setOpen] = useState(false);
   return (
@@ -36,13 +36,19 @@ function Workspace({ children }: { children: React.ReactNode }) {
         </nav>
         <div className="sidebar-footer">© 2026 Навигатор продаж</div>
       </aside>
-      <main className="main"><div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 10 }}><button className="mobile-menu-btn" aria-label="Меню" onClick={() => setOpen((v) => !v)}><Menu size={18} /></button></div>{children}</main>
+      <main className="main">
+        <div className="app-topbar">
+          <button className="mobile-menu-btn" aria-label="Меню" onClick={() => setOpen((v) => !v)}><Menu size={18} /></button>
+          <div className="account-bar"><span title={userEmail}>{userEmail}</span><button className="btn" onClick={onLogout}>Выйти</button></div>
+        </div>
+        {children}
+      </main>
     </div>
   );
 }
 
-export default function App() {
-  return <ErrorBoundary><Workspace><Switch>
+export default function App({ userEmail, onLogout }: { userEmail: string; onLogout: () => void }) {
+  return <ErrorBoundary><Workspace userEmail={userEmail} onLogout={onLogout}><Switch>
     <Route path="/" component={DashboardPage} />
     <Route path="/marketplaces" component={MarketplacesPage} />
     <Route path="/marketplace/:id" component={MarketplaceDetailPage} />

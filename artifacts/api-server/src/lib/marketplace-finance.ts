@@ -19,6 +19,8 @@ export type WildberriesFinanceResult = {
   rowsCount: number;
   incomplete: boolean;
   totals: WildberriesFinanceTotals;
+  soldItems: Array<{ sellerSku: string; externalProductId: string; quantity: number }>;
+  catalogCost?: { matchedUnits: number; unmatchedUnits: number; costOfGoods: number };
 };
 
 type UnknownRecord = Record<string, unknown>;
@@ -36,8 +38,19 @@ function amount(value: unknown): number {
   return Number.isFinite(parsed) ? parsed : 0;
 }
 
+function textField(row: UnknownRecord, ...keys: string[]): string {
+  for (const key of keys) {
+    const value = row[key];
+    if (typeof value === "string" || typeof value === "number") {
+      const text = String(value).trim();
+      if (text) return text;
+    }
+  }
+  return "";
+}
+
 const FIELDS = [
-  "rrdId", "docTypeName", "currency", "retailAmount", "ppvzForPay",
+  "rrdId", "docTypeName", "currency", "retailAmount", "ppvzForPay", "saName", "nmId", "quantity",
   "deliveryRub", "storageFee", "acceptance", "penalty",
   "additionalPayment", "deduction", "acquiringFee", "ppvzReward",
 ];
@@ -135,6 +148,23 @@ export async function getWildberriesFinanceReport(
   const currency = rows.map((row) => record(row)["currency"])
     .find((value): value is string => typeof value === "string") ?? null;
 
+  const soldItemsByIdentity = new Map<string, { sellerSku: string; externalProductId: string; quantity: number }>();
+  for (const raw of rows) {
+    const row = record(raw);
+    const docType = textField(row, "docTypeName", "doc_type_name").toLocaleLowerCase("ru-RU");
+    if (!docType.includes("продаж") && !docType.includes("возврат")) continue;
+    const sellerSku = textField(row, "saName", "sa_name", "supplierArticle");
+    const externalProductId = textField(row, "nmId", "nm_id", "nmID");
+    if (!sellerSku && !externalProductId) continue;
+    const qty = Math.abs(amount(row["quantity"]));
+    if (!qty) continue;
+    const signedQuantity = docType.includes("возврат") ? -qty : qty;
+    const identity = `${sellerSku.toLocaleLowerCase("ru-RU")}\u0000${externalProductId}`;
+    const previous = soldItemsByIdentity.get(identity);
+    if (previous) previous.quantity += signedQuantity;
+    else soldItemsByIdentity.set(identity, { sellerSku, externalProductId, quantity: signedQuantity });
+  }
+
   return {
     marketplace: "wildberries",
     currency,
@@ -143,5 +173,6 @@ export async function getWildberriesFinanceReport(
     rowsCount: rows.length,
     incomplete: rows.length >= 100000,
     totals: aggregateWildberriesFinance(rows),
+    soldItems: [...soldItemsByIdentity.values()].filter((item) => item.quantity !== 0),
   };
 }

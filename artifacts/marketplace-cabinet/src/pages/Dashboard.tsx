@@ -3,7 +3,7 @@ import type { FormEvent } from "react";
 import { Link } from "wouter";
 import {
   Activity, Bot, ChevronDown, ChevronUp, CircleHelp, DollarSign,
-  RefreshCw, Send, ShoppingCart, Package, Wallet, X,
+  RefreshCw, Send, ShoppingCart, Package, Wallet, X, Trash2,
 } from "lucide-react";
 import {
   Area, AreaChart, Bar, BarChart, CartesianGrid, ResponsiveContainer,
@@ -12,9 +12,13 @@ import {
 import { formatMoney, formatNumber } from "@/lib/format";
 import {
   formatApiError, getMarketplaceConnections, getMarketplaceDashboard,
+  getAiAssistantConfig, sendAiAssistantMessage,
+  getOzonFinanceReport, getWildberriesFinanceReport, getSellerExpenses,
+  createSellerExpense, deleteSellerExpense,
 } from "@/lib/marketplace-api";
 import type {
   MarketplaceConnection, MarketplaceDashboard, MarketplaceFilter, MarketplacePeriod,
+  OzonFinanceReport, WildberriesFinanceReport,
 } from "@/lib/marketplace-api";
 import "./dashboard-approved.css";
 
@@ -23,15 +27,21 @@ const PERIODS: Array<{ key: MarketplacePeriod; label: string }> = [
   { key: "30d", label: "30 дней" },
   { key: "90d", label: "90 дней" },
 ];
-const FINANCE_ITEMS = [
-  { key: "margin", label: "Маржа", note: "Потребуются отчёты о реализации и себестоимости" },
-  { key: "profitability", label: "Рентабельность", note: "Рассчитывается после подтверждения формулы маржи" },
-  { key: "revenue", label: "Выручка", note: "Будет рассчитана по финансовым отчётам площадок" },
-  { key: "expenses", label: "Расходы", note: "Комиссии, логистика, хранение и услуги" },
-  { key: "cost", label: "Себестоимость", note: "Нужна загрузка себестоимости товаров" },
-  { key: "ads", label: "Реклама", note: "Нужны рекламные отчёты площадок" },
-  { key: "extra", label: "Доп. расходы", note: "Настраиваемые расходы продавца" },
+const DERIVED_FINANCE_ITEMS = [
+  { key: "margin", label: "Маржа", note: "Появится после сопоставления продаж с себестоимостью товаров" },
+  { key: "profitability", label: "Рентабельность", note: "Рассчитывается на основе маржи и выручки" },
+  { key: "cost", label: "Себестоимость проданного", note: "Нужна связь строк финансового отчёта с товарами каталога" },
+  { key: "ads", label: "Реклама", note: "Загрузите рекламный отчёт площадки, чтобы учесть расходы на продвижение" },
 ] as const;
+
+function previousFullWeek() {
+  const end = new Date();
+  end.setUTCHours(0, 0, 0, 0);
+  end.setUTCDate(end.getUTCDate() - 1);
+  const start = new Date(end);
+  start.setUTCDate(start.getUTCDate() - 6);
+  return { from: start.toISOString().slice(0, 10), to: end.toISOString().slice(0, 10) };
+}
 
 function shortMoney(value: number) {
   if (Math.abs(value) >= 1_000_000) return `${(value / 1_000_000).toFixed(1)} млн`;
@@ -61,11 +71,26 @@ export default function DashboardPage() {
   const [funnelOpen, setFunnelOpen] = useState(true);
   const [financeOpen, setFinanceOpen] = useState(true);
   const [expandedFinance, setExpandedFinance] = useState<string[]>([]);
-  const [chatOpen, setChatOpen] = useState(true);
+  const [financeLoading, setFinanceLoading] = useState(false);
+  const [financePeriod, setFinancePeriod] = useState(() => previousFullWeek());
+  const [ozonFinance, setOzonFinance] = useState<OzonFinanceReport | null>(null);
+  const [wildberriesFinance, setWildberriesFinance] = useState<WildberriesFinanceReport | null>(null);
+  const [financeErrors, setFinanceErrors] = useState<string[]>([]);
+  const [sellerExpenses, setSellerExpenses] = useState<Awaited<ReturnType<typeof getSellerExpenses>> | null>(null);
+  const [expenseForm, setExpenseForm] = useState({ expenseDate: previousFullWeek().to, category: "Прочее", description: "", amount: "" });
+  const [expenseSaving, setExpenseSaving] = useState(false);
+  const [chatOpen, setChatOpen] = useState(false);
   const [chatInput, setChatInput] = useState("");
+  const [aiConfig, setAiConfig] = useState<{ configured: boolean; model: string } | null>(null);
+  const [chatBusy, setChatBusy] = useState(false);
   const [messages, setMessages] = useState<Array<{ role: "assistant" | "user"; text: string }>>([
-    { role: "assistant", text: "Здравствуйте! Я помогу разобраться с показателями ваших магазинов. Сейчас ответы доступны в демонстрационном режиме." },
+    { role: "assistant", text: "Здравствуйте! Задайте вопрос о данных подключённых магазинов." },
   ]);
+
+  useEffect(() => {
+    void getAiAssistantConfig().then((config) => setAiConfig({ configured: config.configured, model: config.model }))
+      .catch(() => setAiConfig({ configured: false, model: "" }));
+  }, []);
 
   useEffect(() => {
     let active = true;
@@ -87,6 +112,60 @@ export default function DashboardPage() {
     return () => { active = false; };
   }, [period, marketplace, refreshKey]);
 
+  useEffect(() => {
+    let active = true;
+    const connectedMarketplaces = new Set(connections.filter((item) => item.connected).map((item) => item.marketplace));
+    if (!connections.length) return;
+    setFinanceLoading(true);
+    setFinanceErrors([]);
+    setOzonFinance(null);
+    setWildberriesFinance(null);
+    const jobs: Array<Promise<void>> = [];
+    if (connectedMarketplaces.has("ozon") && (marketplace === "all" || marketplace === "ozon")) {
+      jobs.push(getOzonFinanceReport(financePeriod.from, financePeriod.to).then((report) => {
+        if (active) setOzonFinance(report);
+      }).catch((error: unknown) => {
+        if (active) setFinanceErrors((current) => [...current, `Ozon: ${formatApiError(error)}`]);
+      }));
+    } else setOzonFinance(null);
+    if (connectedMarketplaces.has("wildberries") && (marketplace === "all" || marketplace === "wildberries")) {
+      jobs.push(getWildberriesFinanceReport(financePeriod.from, financePeriod.to).then((report) => {
+        if (active) setWildberriesFinance(report);
+      }).catch((error: unknown) => {
+        if (active) setFinanceErrors((current) => [...current, `Wildberries: ${formatApiError(error)}`]);
+      }));
+    } else setWildberriesFinance(null);
+    jobs.push(getSellerExpenses(financePeriod.from, financePeriod.to).then((report) => {
+      if (active) setSellerExpenses(report);
+    }).catch((error: unknown) => {
+      if (active) setFinanceErrors((current) => [...current, `Расходы продавца: ${formatApiError(error)}`]);
+    }));
+    void Promise.all(jobs).finally(() => { if (active) setFinanceLoading(false); });
+    return () => { active = false; };
+  }, [connections, financePeriod, marketplace, refreshKey]);
+
+  async function addSellerExpense(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!expenseForm.amount.trim() || expenseSaving) return;
+    setExpenseSaving(true);
+    try {
+      await createSellerExpense(expenseForm);
+      setExpenseForm((current) => ({ ...current, description: "", amount: "" }));
+      setRefreshKey((value) => value + 1);
+    } catch (error) {
+      setFinanceErrors((current) => [...current, `Расход продавца: ${formatApiError(error)}`]);
+    } finally { setExpenseSaving(false); }
+  }
+
+  async function removeSellerExpense(id: string) {
+    try {
+      await deleteSellerExpense(id);
+      setRefreshKey((value) => value + 1);
+    } catch (error) {
+      setFinanceErrors((current) => [...current, `Удаление расхода: ${formatApiError(error)}`]);
+    }
+  }
+
   const series = useMemo(() => (data?.salesSeries ?? []).slice(-14).map((item) => ({
     ...item,
     label: dateLabel(item.date),
@@ -97,7 +176,7 @@ export default function DashboardPage() {
     wildberries: series.reduce((sum, day) => sum + day.wildberriesRevenue, 0),
   }), [series]);
   const orderBars = useMemo(() => (data?.funnels ?? []).map((item) => ({
-    name: marketLabel(item.marketplace),
+    name: item.marketplace === "ozon" ? "Ozon · ед. заказано" : marketLabel(item.marketplace),
     marketplace: item.marketplace,
     orders: item.orders,
   })), [data]);
@@ -107,20 +186,47 @@ export default function DashboardPage() {
     { label: "Проданные единицы", value: formatNumber(data?.units ?? 0), icon: Package },
     { label: "Средний чек", value: data && data.averageOrderValue > 0 ? formatMoney(data.averageOrderValue) : "—", icon: Wallet },
   ];
+  const wbCost = wildberriesFinance?.catalogCost;
+  const wbCostComplete = Boolean(wildberriesFinance && wbCost && wildberriesFinance.soldItems.length > 0 && wbCost.unmatchedUnits === 0);
+  const wbMargin = wbCostComplete && wildberriesFinance && wbCost
+    ? wildberriesFinance.totals.sellerPayout - wbCost.costOfGoods
+    : null;
+  const manuallyTrackedAds = sellerExpenses?.expenses
+    .filter((expense) => ["реклама", "продвижение", "ads"].includes(expense.category.trim().toLocaleLowerCase("ru-RU")))
+    .reduce((sum, expense) => sum + Number(expense.amount), 0);
 
   function toggleFinance(key: string) {
     setExpandedFinance((current) => current.includes(key) ? current.filter((item) => item !== key) : [...current, key]);
   }
-  function sendMessage(event: FormEvent<HTMLFormElement>) {
+  async function sendMessage(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const question = chatInput.trim();
-    if (!question) return;
-    setMessages((current) => [
-      ...current,
-      { role: "user", text: question },
-      { role: "assistant", text: "Демонстрационный режим: подключение модели ИИ ещё не выполнено. В рабочей версии ответ будет формироваться по данным выбранных магазинов и периода." },
-    ]);
+    if (!question || chatBusy) return;
+    const conversation = [...messages, { role: "user" as const, text: question }];
+    setMessages(conversation);
     setChatInput("");
+    if (!aiConfig?.configured) {
+      setMessages([...conversation, { role: "assistant", text: "ИИ-провайдер не настроен. Откройте Настройки → ИИ-помощник, сохраните Base URL, API-ключ и модель." }]);
+      return;
+    }
+    const context = JSON.stringify({
+      period,
+      marketplace,
+      totals: { revenue: data?.revenue ?? 0, orders: data?.orders ?? 0, units: data?.units ?? 0, averageOrderValue: data?.averageOrderValue ?? 0 },
+      recentDailySales: data?.salesSeries.slice(-14) ?? [],
+      funnels: data?.funnels ?? [],
+      dataWarnings: data?.partialErrors ?? [],
+    });
+    setChatBusy(true);
+    try {
+      const result = await sendAiAssistantMessage(
+        conversation.slice(-10).map((item) => ({ role: item.role, content: item.text })),
+        context,
+      );
+      setMessages((current) => [...current, { role: "assistant", text: result.answer }]);
+    } catch (error) {
+      setMessages((current) => [...current, { role: "assistant", text: `Не удалось получить ответ: ${formatApiError(error)}` }]);
+    } finally { setChatBusy(false); }
   }
 
   return (
@@ -209,12 +315,12 @@ export default function DashboardPage() {
               <BarChart data={orderBars} margin={{ top: 12, right: 18, left: 4, bottom: 0 }}>
                 <CartesianGrid stroke="#e8efeb" strokeDasharray="4 5" vertical={false} />
                 <XAxis dataKey="name" tickLine={false} axisLine={false} />
-                <YAxis tickFormatter={(value) => shortMoney(Number(value))} tickLine={false} axisLine={false} width={48} />
-                <Tooltip formatter={(value) => formatNumber(Number(value))} />
-                <Bar dataKey="orders" name="Заказы" radius={[6, 6, 0, 0]} fill="#2f7a6a" />
+                <YAxis tickFormatter={(value) => formatNumber(Number(value))} tickLine={false} axisLine={false} width={48} />
+                <Tooltip formatter={(value, _name, item) => [formatNumber(Number(value)), item.payload.marketplace === "ozon" ? "Заказано, шт." : "Заказы"]} />
+                <Bar dataKey="orders" name="Заказы / единицы" radius={[6, 6, 0, 0]} fill="#2f7a6a" />
               </BarChart>
             </ResponsiveContainer> : <div className="approved-empty">Нет достоверной разбивки заказов по площадкам за выбранный период.</div>}
-            <p className="approved-footnote">История заказов по дням пока не предоставляется всеми подключёнными API. Здесь не подставляются вымышленные значения.</p>
+            <p className="approved-footnote">WB показывает число заказов; Ozon — заказанные единицы товара. Значения подписаны отдельно, чтобы не смешивать заказы и штуки.</p>
           </div>}
         </section>
 
@@ -229,8 +335,8 @@ export default function DashboardPage() {
               <div className="approved-funnel-stages">
                 <div><span>Просмотры</span><strong>{formatNumber(funnel.views)}</strong></div>
                 <div><span>Корзины</span><strong>{formatNumber(funnel.cartAdds)}</strong><small>{funnel.viewToCartPercent.toFixed(1)}%</small></div>
-                <div><span>Заказы</span><strong>{formatNumber(funnel.orders)}</strong><small>{funnel.cartToOrderPercent.toFixed(1)}%</small></div>
-                <div><span>Выкуплено</span><strong>{formatNumber(funnel.purchases)}</strong><small>{funnel.orderToPurchasePercent.toFixed(1)}%</small></div>
+                <div><span>{funnel.marketplace === "ozon" ? "Заказано, шт." : "Заказы"}</span><strong>{formatNumber(funnel.orders)}</strong><small>{funnel.cartToOrderPercent.toFixed(1)}%</small></div>
+                <div><span>{funnel.marketplace === "ozon" ? "Выкуплено · нет данных" : "Выкуплено"}</span><strong>{funnel.marketplace === "ozon" ? "—" : formatNumber(funnel.purchases)}</strong>{funnel.marketplace !== "ozon" && <small>{funnel.orderToPurchasePercent.toFixed(1)}%</small>}</div>
               </div>
             </article>)}
           </div> : <div className="approved-empty">Для выбранных площадок API пока не вернуло полный набор этапов воронки.</div>}
@@ -239,17 +345,76 @@ export default function DashboardPage() {
 
         <section className="approved-section">
           <div className="approved-section-heading">
-            <div><h2>Сводка по финансам</h2><p>Ноябрь · блоки подготовлены под реальные финансовые отчёты</p></div>
+            <div><h2>Сводка по финансам</h2><p>Финансовые отчёты за {dateLabel(financePeriod.from)}–{dateLabel(financePeriod.to)} · предыдущие 7 полных дней</p></div>
             <button className="approved-collapse" onClick={() => setFinanceOpen((value) => !value)} aria-expanded={financeOpen}>{financeOpen ? <ChevronUp size={16} /> : <ChevronDown size={16} />} {financeOpen ? "Свернуть" : "Развернуть"}</button>
           </div>
-          {financeOpen && <div className="approved-finance-grid">
-            {FINANCE_ITEMS.map((item) => <article className="approved-finance-card" key={item.key}>
-              <div className="approved-finance-head"><h3>{item.label}</h3><button aria-label={`Подробнее: ${item.label}`} onClick={() => toggleFinance(item.key)}>{expandedFinance.includes(item.key) ? <ChevronUp size={15} /> : <ChevronDown size={15} />}</button></div>
-              <strong>—</strong>
-              {expandedFinance.includes(item.key) && <p>{item.note}</p>}
-            </article>)}
-          </div>}
-          <p className="approved-footnote">Финансовые суммы из переданного макета не перенесены в расчёты: они демонстрационные и не подтверждены API.</p>
+          {financeOpen && <>
+            {financeErrors.map((item) => <div className="approved-alert approved-alert-muted" role="status" key={item}>{item}</div>)}
+            <div className="approved-finance-grid">
+              {ozonFinance && <article className="approved-finance-card approved-finance-report">
+                <div className="approved-finance-head"><h3><MarketDot marketplace="ozon" /> Ozon · начисления</h3><span>{financeLoading ? "Обновляем…" : `${ozonFinance.totals.accrualsCount} операций`}</span></div>
+                <strong>{financeLoading ? "…" : formatMoney(ozonFinance.totals.accrued)}</strong>
+                <div className="approved-finance-rows">
+                  {[ ["Проводки", ozonFinance.totals.posting], ["Товарные операции", ozonFinance.totals.item], ["Нетоварные операции", ozonFinance.totals.nonItem], ["Контейнерные сборы", ozonFinance.totals.containerFees], ["Прочее", ozonFinance.totals.other] ].map(([label, amount]) => <div key={String(label)}><span>{label}</span><b>{formatMoney(Number(amount))}</b></div>)}
+                </div>
+                {ozonFinance.totals.missingAmountRows > 0 && <p>{ozonFinance.totals.missingAmountRows} операций без суммы пропущено.</p>}
+              </article>}
+              {wildberriesFinance && <article className="approved-finance-card approved-finance-report">
+                <div className="approved-finance-head"><h3><MarketDot marketplace="wildberries" /> Wildberries · отчёт реализации</h3><span>{financeLoading ? "Обновляем…" : `${wildberriesFinance.rowsCount} строк`}</span></div>
+                <strong>{financeLoading ? "…" : formatMoney(wildberriesFinance.totals.retailAmount)}</strong>
+                <div className="approved-finance-rows">
+                  {[ ["К выплате продавцу", wildberriesFinance.totals.sellerPayout], ["Вознаграждение WB", wildberriesFinance.totals.marketplaceReward], ["Логистика", wildberriesFinance.totals.delivery], ["Хранение", wildberriesFinance.totals.storage], ["Приёмка", wildberriesFinance.totals.acceptance], ["Штрафы", wildberriesFinance.totals.penalties], ["Удержания", wildberriesFinance.totals.deductions], ["Эквайринг", wildberriesFinance.totals.acquiring], ["Доп. выплаты", wildberriesFinance.totals.additionalPayments] ].map(([label, amount]) => <div key={String(label)}><span>{label}</span><b>{formatMoney(Number(amount))}</b></div>)}
+                </div>
+                {wildberriesFinance.incomplete && <p>Выведена только часть отчёта. Уточните период выгрузки.</p>}
+              </article>}
+              {!financeLoading && !ozonFinance && !wildberriesFinance && !financeErrors.length && <div className="approved-empty">Подключите площадку с доступом к финансовым отчётам.</div>}
+              {DERIVED_FINANCE_ITEMS.map((item) => {
+                const value = item.key === "cost" && wbCost && wildberriesFinance?.soldItems.length
+                  ? formatMoney(wbCost.costOfGoods)
+                  : item.key === "ads" && manuallyTrackedAds !== undefined
+                    ? formatMoney(manuallyTrackedAds)
+                  : item.key === "margin" && wbMargin !== null
+                    ? formatMoney(wbMargin)
+                    : item.key === "profitability" && wbMargin !== null && (wildberriesFinance?.totals.sellerPayout ?? 0) !== 0
+                      ? `${((wbMargin / wildberriesFinance!.totals.sellerPayout) * 100).toFixed(1)}%`
+                      : "—";
+                const note = item.key === "cost" && wbCost && wildberriesFinance?.soldItems.length
+                  ? `Wildberries: учтено ${formatNumber(wbCost.matchedUnits)} шт.${wbCost.unmatchedUnits ? `, без сопоставления ${formatNumber(wbCost.unmatchedUnits)} шт.` : ""}.`
+                  : item.key === "ads" && manuallyTrackedAds !== undefined
+                    ? "Сумма из расходов продавца с категорией «Реклама» или «Продвижение». Добавляйте рекламные траты в форме ниже."
+                  : item.key === "margin" && wbMargin !== null
+                    ? "Wildberries: к выплате продавцу минус себестоимость. Дополнительные расходы и реклама сюда не включены."
+                    : item.key === "profitability" && wbMargin !== null
+                      ? "Wildberries: маржа разделена на сумму к выплате продавцу."
+                      : item.note;
+                return <article className="approved-finance-card" key={item.key}>
+                  <div className="approved-finance-head"><h3>{item.label}</h3><button aria-label={`Подробнее: ${item.label}`} onClick={() => toggleFinance(item.key)}>{expandedFinance.includes(item.key) ? <ChevronUp size={15} /> : <ChevronDown size={15} />}</button></div>
+                  <strong className={value === "—" ? "" : "approved-finance-value"}>{value}</strong>
+                  {expandedFinance.includes(item.key) && <p>{note}</p>}
+                </article>;
+              })}
+              <article className="approved-finance-card approved-expenses-card">
+                <div className="approved-finance-head"><h3>Дополнительные расходы продавца</h3><span>{sellerExpenses ? `${sellerExpenses.expenses.length} записей` : ""}</span></div>
+                <strong>{sellerExpenses ? formatMoney(sellerExpenses.total) : financeLoading ? "…" : "0 ₽"}</strong>
+                <form className="approved-expense-form" onSubmit={addSellerExpense}>
+                  <label>Дата<input type="date" value={expenseForm.expenseDate} onChange={(event) => setExpenseForm((current) => ({ ...current, expenseDate: event.target.value }))} required /></label>
+                  <label>Категория<input value={expenseForm.category} onChange={(event) => setExpenseForm((current) => ({ ...current, category: event.target.value }))} maxLength={80} placeholder="Например, упаковка" required /></label>
+                  <label>Описание<input value={expenseForm.description} onChange={(event) => setExpenseForm((current) => ({ ...current, description: event.target.value }))} maxLength={300} placeholder="Необязательно" /></label>
+                  <label>Сумма, ₽<input inputMode="decimal" value={expenseForm.amount} onChange={(event) => setExpenseForm((current) => ({ ...current, amount: event.target.value }))} placeholder="0,00" required /></label>
+                  <button type="submit" disabled={expenseSaving || !expenseForm.amount.trim()}>{expenseSaving ? "Сохраняем…" : "Добавить расход"}</button>
+                </form>
+                {!!sellerExpenses?.expenses.length && <div className="approved-expense-list">
+                  {sellerExpenses.expenses.map((expense) => <div key={expense.id}>
+                    <span><b>{expense.category}</b>{expense.description && ` · ${expense.description}`}<small>{dateLabel(expense.expenseDate)}</small></span>
+                    <strong>{formatMoney(Number(expense.amount))}</strong>
+                    <button type="button" aria-label={`Удалить расход ${expense.category}`} title="Удалить расход" onClick={() => void removeSellerExpense(expense.id)}><Trash2 size={14} /></button>
+                  </div>)}
+                </div>}
+                <p>Сумма показана за выбранные 7 дней. Эти расходы будут вычитаться при расчёте прибыли.</p>
+              </article>
+            </div>
+          </>}
+          <p className="approved-footnote">Показаны суммы из отчётов площадок; категории Ozon и WB различаются и не складываются в общие расходы. Себестоимость и маржа появятся после сопоставления строк продаж с товарами каталога. Реклама учитывается по отдельному отчёту площадки.</p>
         </section>
 
         <section className="approved-section">
@@ -277,21 +442,22 @@ export default function DashboardPage() {
         <div className="approved-assistant-head">
           <div><Bot size={18} /><strong>ИИ-помощник</strong></div>
           <div className="approved-assistant-actions">
-            <button title="Новый чат" aria-label="Новый чат" onClick={() => setMessages([{ role: "assistant", text: "Новый диалог. В демонстрационном режиме я пока не подключён к модели ИИ." }])}><Activity size={16} /></button>
+            <button title="Новый чат" aria-label="Новый чат" onClick={() => setMessages([{ role: "assistant", text: "Новый диалог. Задайте вопрос о данных подключённых магазинов." }])} disabled={chatBusy}><Activity size={16} /></button>
             <button title="Скрыть панель" aria-label="Скрыть панель" onClick={() => setChatOpen(false)}><X size={16} /></button>
           </div>
         </div>
-        <div className="approved-assistant-sub">Помощник по вашим данным <span>ДЕМО</span></div>
+        <div className="approved-assistant-sub">Помощник по вашим данным <span>{aiConfig === null ? "…" : aiConfig.configured ? aiConfig.model : "НЕ НАСТРОЕН"}</span></div>
         <div className="approved-chat-messages" aria-live="polite">
           {messages.map((message, index) => <div className={`approved-chat-message ${message.role}`} key={index}>
             {message.role === "assistant" && <small>ИИ-помощник</small>}{message.text}
           </div>)}
+          {chatBusy && <div className="approved-chat-message assistant"><small>ИИ-помощник</small>Формирую ответ…</div>}
         </div>
         <div className="approved-chat-context"><CircleHelp size={14} /> {connected.length} подключённых площадок · {PERIODS.find((item) => item.key === period)?.label}</div>
         <form className="approved-chat-form" onSubmit={sendMessage}>
           <label htmlFor="approved-chat-input">Ваш вопрос</label>
-          <div><textarea id="approved-chat-input" value={chatInput} onChange={(event) => setChatInput(event.target.value)} rows={3} maxLength={2000} placeholder="Спросите о ваших магазинах…" /><button aria-label="Отправить вопрос" type="submit" disabled={!chatInput.trim()}><Send size={16} /></button></div>
-          <small>Ответы пока демонстрационные</small>
+          <div><textarea id="approved-chat-input" value={chatInput} onChange={(event) => setChatInput(event.target.value)} rows={3} maxLength={2000} placeholder="Спросите о ваших магазинах…" disabled={chatBusy} /><button aria-label="Отправить вопрос" type="submit" disabled={!chatInput.trim() || chatBusy}><Send size={16} /></button></div>
+          <small>{aiConfig?.configured ? `Модель: ${aiConfig.model}` : "Подключите модель в Настройки → ИИ-помощник"}</small>
         </form>
       </aside>
       {!chatOpen && <button className="approved-assistant-open" onClick={() => setChatOpen(true)}><Bot size={16} /> ИИ-помощник</button>}

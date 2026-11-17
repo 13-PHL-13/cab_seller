@@ -122,12 +122,7 @@ function Root() {
   if (loading) return <div className="empty-state">Загрузка личного кабинета…</div>;
   if (window.location.pathname === "/reset-password") return <ResetPasswordScreen />;
   if (!user) return <><AuthScreen onAuthenticated={setUser} />{(verifyMessage || verifyError) && <div role="status" style={{ position: "fixed", bottom: 20, left: 20, right: 20, textAlign: "center" }}>{verifyError || verifyMessage}</div>}</>;
-  return <>
-    <div style={{ position: "fixed", top: 12, right: 20, zIndex: 100, display: "flex", gap: 12, alignItems: "center", background: "var(--card, #fff)", padding: 8, borderRadius: 10 }}>
-      <span>{user.email}</span><button className="btn" onClick={logout}>Выйти</button>
-    </div>
-    <ErrorBoundary><App /></ErrorBoundary>
-  </>;
+  return <ErrorBoundary><App userEmail={user.email} onLogout={logout} /></ErrorBoundary>;
 }
 
 createRoot(document.getElementById("root")!, {
