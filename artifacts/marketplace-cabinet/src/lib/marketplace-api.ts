@@ -10,6 +10,45 @@ export interface MarketplaceConnection {
   statusMessage: string | null;
 }
 
+export interface AiAssistantConfig {
+  configured: boolean;
+  baseUrl: string;
+  model: string;
+  apiKeyConfigured: boolean;
+}
+
+export function getAiAssistantConfig(): Promise<AiAssistantConfig> {
+  return apiRequest("/api/marketplace/ai-config");
+}
+
+export function fetchAiModels(baseUrl: string, apiKey: string): Promise<{ models: string[] }> {
+  return apiRequest("/api/marketplace/ai-models", {
+    method: "POST",
+    body: JSON.stringify({ baseUrl, apiKey }),
+  });
+}
+
+export function saveAiAssistantConfig(input: { baseUrl: string; apiKey: string; model: string }): Promise<AiAssistantConfig> {
+  return apiRequest("/api/marketplace/ai-config", {
+    method: "PUT",
+    body: JSON.stringify(input),
+  });
+}
+
+export function disconnectAiAssistant(): Promise<void> {
+  return apiRequest("/api/marketplace/ai-config", { method: "DELETE" });
+}
+
+export function sendAiAssistantMessage(
+  messages: Array<{ role: "user" | "assistant"; content: string }>,
+  context: string,
+): Promise<{ answer: string }> {
+  return apiRequest("/api/marketplace/ai-chat", {
+    method: "POST",
+    body: JSON.stringify({ messages, context }),
+  });
+}
+
 export interface MarketplaceDashboard {
   period: MarketplacePeriod;
   marketplace: MarketplaceFilter;
@@ -93,4 +132,91 @@ export function disconnectMarketplace(marketplace: MarketplaceId): Promise<void>
 
 export function formatApiError(error: unknown): string {
   return error instanceof Error ? error.message : "Неизвестная ошибка.";
+}
+
+
+export interface WildberriesFinanceReport {
+  marketplace: "wildberries";
+  currency: string | null;
+  from: string;
+  to: string;
+  rowsCount: number;
+  incomplete: boolean;
+  soldItems: Array<{ sellerSku: string; externalProductId: string; quantity: number }>;
+  catalogCost?: { matchedUnits: number; unmatchedUnits: number; costOfGoods: number };
+  totals: {
+    retailAmount: number;
+    sellerPayout: number;
+    delivery: number;
+    storage: number;
+    acceptance: number;
+    penalties: number;
+    additionalPayments: number;
+    deductions: number;
+    acquiring: number;
+    marketplaceReward: number;
+  };
+}
+
+export function getWildberriesFinanceReport(
+  from: string,
+  to: string,
+): Promise<WildberriesFinanceReport> {
+  const query = new URLSearchParams({ from, to });
+  return apiRequest(`/api/marketplace/finance/wildberries?${query.toString()}`);
+}
+
+
+export interface OzonFinanceReport {
+  marketplace: "ozon";
+  currency: string | null;
+  from: string;
+  to: string;
+  totals: {
+    accrued: number;
+    posting: number;
+    item: number;
+    nonItem: number;
+    containerFees: number;
+    other: number;
+    accrualsCount: number;
+    missingAmountRows: number;
+  };
+}
+
+export function getOzonFinanceReport(
+  from: string,
+  to: string,
+): Promise<OzonFinanceReport> {
+  const query = new URLSearchParams({ from, to });
+  return apiRequest(`/api/marketplace/finance/ozon?${query.toString()}`);
+}
+
+export interface SellerExpense {
+  id: string;
+  expenseDate: string;
+  category: string;
+  description: string;
+  amount: string;
+  currency: string;
+}
+
+export interface SellerExpensesReport {
+  expenses: SellerExpense[];
+  total: number;
+  from: string;
+  to: string;
+}
+
+export function getSellerExpenses(from: string, to: string): Promise<SellerExpensesReport> {
+  const query = new URLSearchParams({ from, to });
+  return apiRequest(`/api/marketplace/finance/expenses?${query.toString()}`);
+}
+
+export function createSellerExpense(input: { expenseDate: string; category: string; description?: string; amount: string }): Promise<SellerExpense> {
+  return apiRequest("/api/marketplace/finance/expenses", { method: "POST", body: JSON.stringify(input) });
+}
+
+export function deleteSellerExpense(id: string): Promise<void> {
+  return apiRequest(`/api/marketplace/finance/expenses/${id}`, { method: "DELETE" });
 }

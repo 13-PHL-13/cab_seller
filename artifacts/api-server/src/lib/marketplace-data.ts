@@ -15,6 +15,13 @@ export type MarketplaceSnapshot = {
   funnel: Omit<DailyPoint, "date" | "revenue">;
 };
 
+export class MarketplaceRateLimitError extends Error {
+  constructor(public readonly retryAfterSeconds: number) {
+    super(`Превышен лимит запросов площадки. Повторите через ${retryAfterSeconds} сек.`);
+    this.name = "MarketplaceRateLimitError";
+  }
+}
+
 function asRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === "object"
     ? (value as Record<string, unknown>)
@@ -64,11 +71,29 @@ async function requestJson(
   }
 
   if (!response.ok) {
-    throw new Error(
+    const retryAfter = response.headers.get("X-Ratelimit-Retry") ??
+      response.headers.get("Retry-After");
+    if (response.status === 429) {
+      const retrySeconds = Math.max(1, Math.ceil(Number(retryAfter) || 60));
+      throw new MarketplaceRateLimitError(retrySeconds);
+    }
+    const responseBody = (await response.text())
+      .replace(/\s+/g, " ")
+      .slice(0, 300);
+
+    const message =
       response.status === 401 || response.status === 403
         ? "Площадка отклонила ключ или его права доступа."
-        : `Площадка вернула ошибку ${response.status}.`,
-    );
+        : `Площадка вернула ошибку ${response.status}.`;
+
+    const details = [
+      retryAfter ? `Повторить через: ${retryAfter}.` : "",
+      responseBody ? `Подробности: ${responseBody}` : "",
+    ]
+      .filter(Boolean)
+      .join(" ");
+
+    throw new Error(details ? `${message} ${details}` : message);
   }
 
   const payload: unknown = await response.json();
@@ -142,9 +167,9 @@ export async function getOzonSnapshot(
     const point: DailyPoint = {
       date,
       revenue: asNumber(metrics[0]),
-      // ordered_units is a unit count, not an order count or confirmed buyout.
-      // Keep both unavailable rather than fabricating funnel conversion rates.
-      orders: 0,
+      // Ozon exposes ordered units, not an order count or confirmed buyouts.
+      // The dashboard labels this stage explicitly as units.
+      orders: asNumber(metrics[1]),
       units: 0,
       views: asNumber(metrics[2]),
       cartAdds: asNumber(metrics[3]),
@@ -164,35 +189,26 @@ async function requestWildberriesFunnel(
   from: string,
   to: string,
 ): Promise<Record<string, unknown>> {
-  const allCards: unknown[] = [];
-  const pageSize = 1000;
-  const maxPages = 10;
-
-  for (let page = 0; page < maxPages; page += 1) {
-    const response = await requestJson(
-      "https://seller-analytics-api.wildberries.ru/api/analytics/v3/sales-funnel/products",
-      {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: credentials.apiKey,
-        },
-        body: JSON.stringify({
-          selectedPeriod: { start: from, end: to },
-          nmIds: [],
-          skipDeletedNm: false,
-          orderBy: { field: "openCard", mode: "desc" },
-          limit: pageSize,
-          offset: page * pageSize,
-        }),
+  const response = await requestJson(
+    "https://seller-analytics-api.wildberries.ru/api/analytics/v3/sales-funnel/products",
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: credentials.apiKey,
       },
-    );
-    const cards = wildberriesCards(response);
-    allCards.push(...cards);
-    if (cards.length < pageSize) break;
-  }
+      body: JSON.stringify({
+        selectedPeriod: { start: from, end: to },
+        nmIds: [],
+        skipDeletedNm: false,
+        orderBy: { field: "openCard", mode: "desc" },
+        limit: 1000,
+        offset: 0,
+      }),
+    },
+  );
 
-  return { data: { cards: allCards } };
+  return { data: { cards: wildberriesCards(response) } };
 }
 
 async function requestWildberriesSales(
@@ -245,8 +261,15 @@ function readWildberriesFunnel(
 export async function verifyWildberriesCredentials(
   credentials: WildberriesCredentials,
 ): Promise<void> {
-  const { from, to } = dateRange("7d");
-  await requestWildberriesFunnel(credentials, from, to);
+  await requestJson(
+    "https://seller-analytics-api.wildberries.ru/ping",
+    {
+      method: "GET",
+      headers: {
+        Authorization: credentials.apiKey,
+      },
+    },
+  );
 }
 
 export async function getWildberriesSnapshot(

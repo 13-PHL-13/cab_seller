@@ -34,6 +34,9 @@ node_modules
 !.vscode/extensions.json
 
 # misc
+.env
+.env.*
+!.env.example
 /.sass-cache
 /connect.lock
 /coverage
@@ -53,3 +56,6 @@ Thumbs.db
 # Replit
 .cache/
 .local/
+
+# Local product media uploads
+/artifacts/api-server/uploads/
