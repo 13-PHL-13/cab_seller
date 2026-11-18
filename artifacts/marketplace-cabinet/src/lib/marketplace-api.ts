@@ -9,6 +9,7 @@ export interface MarketplaceConnection {
   lastSyncAt: string | null;
   statusMessage: string | null;
 }
+export interface MarketplaceStore { id: number; marketplace: MarketplaceId; storeName: string; lastSyncAt: string | null }
 
 export interface AiAssistantConfig {
   configured: boolean;
@@ -42,11 +43,20 @@ export function disconnectAiAssistant(): Promise<void> {
 export function sendAiAssistantMessage(
   messages: Array<{ role: "user" | "assistant"; content: string }>,
   context: string,
-): Promise<{ answer: string }> {
+  conversationId?: string | null,
+): Promise<{ answer: string; conversationId: string }> {
   return apiRequest("/api/marketplace/ai-chat", {
     method: "POST",
-    body: JSON.stringify({ messages, context }),
+    body: JSON.stringify({ messages, context, ...(conversationId ? { conversationId } : {}) }),
   });
+}
+
+export function getAiAssistantChat(): Promise<{ conversationId: string | null; messages: Array<{ role: "assistant" | "user"; content: string; createdAt: string }> }> {
+  return apiRequest("/api/marketplace/ai-chat");
+}
+
+export function startAiAssistantChat(context: string): Promise<{ conversationId: string }> {
+  return apiRequest("/api/marketplace/ai-chat/new", { method: "POST", body: JSON.stringify({ context }) });
 }
 
 export interface MarketplaceDashboard {
@@ -109,16 +119,27 @@ export function getMarketplaceDashboard(
   marketplace: MarketplaceFilter = "all",
 ): Promise<MarketplaceDashboard> {
   const query = new URLSearchParams({ period, marketplace });
+  const selectedStoreId = localStorage.getItem("navigator-active-store-id") ?? "";
+  if (selectedStoreId) query.set("storeId", selectedStoreId);
   return apiRequest(`/api/marketplace/dashboard?${query.toString()}`);
 }
 
 export function getMarketplaceConnections(): Promise<MarketplaceConnection[]> {
-  return apiRequest("/api/marketplace/connections");
+  const selectedStoreId = localStorage.getItem("navigator-active-store-id") ?? "";
+  return apiRequest(`/api/marketplace/connections${selectedStoreId ? `?storeId=${encodeURIComponent(selectedStoreId)}` : ""}`);
+}
+
+export function getMarketplaceStores(): Promise<{ stores: MarketplaceStore[] }> {
+  return apiRequest("/api/marketplace/stores");
+}
+
+export function deleteMarketplaceStore(id: number): Promise<void> {
+  return apiRequest(`/api/marketplace/stores/${id}`, { method: "DELETE" });
 }
 
 export function connectMarketplace(
   marketplace: MarketplaceId,
-  credentials: { clientId: string; apiKey: string } | { apiKey: string },
+  credentials: { clientId: string; apiKey: string; storeName?: string } | { apiKey: string; storeName?: string },
 ): Promise<MarketplaceConnection> {
   return apiRequest(`/api/marketplace/connections/${marketplace === "ozon" ? "ozon" : "wildberries"}`, {
     method: "POST",
@@ -144,6 +165,8 @@ export interface WildberriesFinanceReport {
   incomplete: boolean;
   soldItems: Array<{ sellerSku: string; externalProductId: string; quantity: number }>;
   catalogCost?: { matchedUnits: number; unmatchedUnits: number; costOfGoods: number };
+  productSalesError?: string | null;
+  productSalesMetric?: "ordered_units" | null;
   totals: {
     retailAmount: number;
     sellerPayout: number;
@@ -163,6 +186,8 @@ export function getWildberriesFinanceReport(
   to: string,
 ): Promise<WildberriesFinanceReport> {
   const query = new URLSearchParams({ from, to });
+  const selectedStoreId = localStorage.getItem("navigator-active-store-id") ?? "";
+  if (selectedStoreId) query.set("storeId", selectedStoreId);
   return apiRequest(`/api/marketplace/finance/wildberries?${query.toString()}`);
 }
 
@@ -172,6 +197,10 @@ export interface OzonFinanceReport {
   currency: string | null;
   from: string;
   to: string;
+  soldItems: Array<{ sellerSku: string; externalProductId: string; quantity: number }>;
+  catalogCost?: { matchedUnits: number; unmatchedUnits: number; costOfGoods: number };
+  productSalesError?: string | null;
+  productSalesMetric?: "ordered_units" | null;
   totals: {
     accrued: number;
     posting: number;
@@ -189,6 +218,8 @@ export function getOzonFinanceReport(
   to: string,
 ): Promise<OzonFinanceReport> {
   const query = new URLSearchParams({ from, to });
+  const selectedStoreId = localStorage.getItem("navigator-active-store-id") ?? "";
+  if (selectedStoreId) query.set("storeId", selectedStoreId);
   return apiRequest(`/api/marketplace/finance/ozon?${query.toString()}`);
 }
 

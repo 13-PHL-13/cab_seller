@@ -16,9 +16,11 @@ import {
   searchOzonAttributeValues,
   searchWildberriesSubjects,
   getWildberriesSubjectCharacteristics,
+  getCogsMinPrices,
   type CogsMarketplace,
   type CogsProduct,
   type CogsHistoryEntry,
+  type CogsMinPriceResult,
   type MarketplaceAttribute,
   type OzonAttributeValue,
   type OzonCategoryType,
@@ -82,6 +84,9 @@ export default function ProductsPage() {
   const [ozonDictionaryOptions, setOzonDictionaryOptions] = useState<Record<number, OzonAttributeValue[]>>({});
   const [ozonDictionaryBusy, setOzonDictionaryBusy] = useState<number | null>(null);
   const [publishError, setPublishError] = useState("");
+  const [minPriceReport, setMinPriceReport] = useState<CogsMinPriceResult | null>(null);
+  const [minPriceMargin, setMinPriceMargin] = useState("0");
+  const [minPriceBusy, setMinPriceBusy] = useState(false);
 
   useEffect(() => {
     const urls = imageFiles.map((file) => URL.createObjectURL(file));
@@ -286,9 +291,17 @@ export default function ProductsPage() {
     try {
       const result = await importMarketplaceProducts(marketplace);
       await refresh();
-      window.alert(`Импорт завершён: добавлено ${result.imported}, уже были в каталоге ${result.existing}.`);
+      window.alert(`Импорт завершён. Добавлено новых товаров: ${result.imported}. Сопоставлено с существующими карточками: ${result.existing}; связи и данные площадки обновлены.`);
     } catch (e) { setError(e instanceof Error ? e.message : "Не удалось импортировать товары."); }
     finally { setImporting(null); }
+  }
+  async function calculateMinPrices() {
+    const margin = Number(minPriceMargin);
+    if (!Number.isFinite(margin) || margin < 0 || margin > 60) { setError("Целевая маржа должна быть от 0 до 60%."); return; }
+    setMinPriceBusy(true); setError("");
+    try { setMinPriceReport(await getCogsMinPrices(margin)); }
+    catch (e) { setError(e instanceof Error ? e.message : "Не удалось получить финансовую основу цены."); }
+    finally { setMinPriceBusy(false); }
   }
   async function publishProduct(product: CogsProduct, marketplace: "ozon" | "wildberries") {
     setPublishTarget({ product, marketplace });
@@ -601,6 +614,13 @@ export default function ProductsPage() {
           <select className="input" style={{width:"auto",minWidth:190}} value={filter} onChange={e=>setFilter(e.target.value as typeof filter)}><option value="all">Все товары</option><option value="both">Общие товары</option><option value="ozon">Ozon</option><option value="wildberries">Wildberries</option></select>
           <span className="badge badge-gray">{visible.length} товаров</span>
         </div>
+      </div>
+      <div className="card" style={{marginBottom:14}}>
+        <div className="card-head" style={{gap:12,flexWrap:"wrap"}}><div><h2 className="card-title">Минимальные цены</h2><p className="card-sub">Финансовая основа — полный прошлый месяц по подключённым API и себестоимость каталога.</p></div><div style={{display:"flex",gap:8,alignItems:"end",marginLeft:"auto",flexWrap:"wrap"}}><label className="field" style={{margin:0}}>Целевая маржа, %<input className="input" type="number" min="0" max="60" step="1" value={minPriceMargin} onChange={(e) => setMinPriceMargin(e.target.value)} style={{width:130}} /></label><button className="btn btn-outline" onClick={() => void calculateMinPrices()} disabled={minPriceBusy}>{minPriceBusy ? "Считаем…" : minPriceReport ? "Пересчитать" : "Рассчитать"}</button></div></div>
+        {!minPriceReport ? <p className="card-sub">Расчёт появится после загрузки отчётов. Для нулевой маржи показываем ориентир безубыточности.</p> : <>
+          <p className="card-sub">Период: {new Date(`${minPriceReport.from}T00:00:00`).toLocaleDateString("ru-RU")}–{new Date(`${minPriceReport.to}T00:00:00`).toLocaleDateString("ru-RU")}. Расчёт: себестоимость ÷ (выплата / выручка − целевая маржа). Коэффициент отражает прошлый месяц и служит ориентиром, а не гарантированной ценой.</p>
+          <div style={{overflowX:"auto"}}><table className="table"><thead><tr><th>Товар</th><th>Артикул</th><th>Себестоимость</th><th>Площадка</th><th>Выплата / выручка</th><th>Минимальная цена</th><th>Текущая цена</th></tr></thead><tbody>{minPriceReport.rows.flatMap((row) => row.marketplaces.map((item) => <tr key={`${row.productId}-${item.marketplace}`}><td>{row.productName}</td><td>{row.sellerSku}</td><td>{money(row.unitCost)}</td><td>{item.marketplace === "ozon" ? "Ozon" : "Wildberries"}</td><td>{item.payoutRate === null ? "—" : `${(item.payoutRate * 100).toFixed(1)}%`}</td><td>{item.minimumPrice === null ? <span title={item.error ?? "Нет данных"}>{item.error ?? "Нет данных"}</span> : <b>{money(item.minimumPrice)}</b>}</td><td>{money(row.salePrice)}</td></tr>))}</tbody></table></div>
+        </>}
       </div>
       <div className="card"><div className="card-head" style={{gap:12,flexWrap:"wrap"}}><h2 className="card-title">Каталог товаров</h2><div style={{display:"flex",gap:8,flexWrap:"wrap",marginLeft:"auto"}}><button className="btn btn-outline btn-sm" onClick={() => void importProducts("ozon")} disabled={Boolean(importing)}><Download size={15}/>{importing === "ozon" ? "Импортируем…" : "Импорт Ozon"}</button><button className="btn btn-outline btn-sm" onClick={() => void importProducts("wildberries")} disabled={Boolean(importing)}><Download size={15}/>{importing === "wildberries" ? "Импортируем…" : "Импорт Wildberries"}</button><button className="btn btn-primary btn-sm" onClick={startNew}><Plus size={16}/> Добавить товар</button></div></div>
         {loading ? <div className="empty-state">Загружаем каталог…</div> : !visible.length ? <div className="empty-state"><PackagePlus size={32}/><p>Товаров пока нет. Добавьте первую карточку.</p><button className="btn btn-primary" onClick={startNew}>Добавить товар</button></div> :

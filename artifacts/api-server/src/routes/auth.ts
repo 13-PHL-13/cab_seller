@@ -1,6 +1,6 @@
 import { and, eq, gt, isNull } from "drizzle-orm";
 import { Router, type IRouter } from "express";
-import { db, emailVerificationTokensTable, passwordResetTokensTable, sessionsTable, usersTable } from "@workspace/db";
+import { db, companiesTable, companyMembershipsTable, emailVerificationTokensTable, passwordResetTokensTable, sessionsTable, usersTable } from "@workspace/db";
 import { clearSessionCookie, createOpaqueToken, hashPassword, hashToken, normalizeEmail, readSessionCookie, sessionCookie, sessionExpiry, verifyPassword } from "../lib/auth";
 import { sendPasswordResetEmail, sendVerificationEmail } from "../lib/mailer";
 import { requireUser } from "../middlewares/requireUser";
@@ -54,10 +54,18 @@ router.post("/auth/register", rateLimit, requireSameOrigin, async (req, res, nex
       res.status(202).json({ message: "Если адрес доступен для регистрации, письмо отправлено. Если у вас уже есть аккаунт, войдите или восстановите пароль." });
       return;
     }
-    const [user] = await db.insert(usersTable).values({ email, passwordHash, status: "active" }).returning({ id: usersTable.id });
     const token = createOpaqueToken();
-    await db.insert(emailVerificationTokensTable).values({
-      userId: user.id, tokenHash: hashToken(token), expiresAt: new Date(Date.now() + 30 * 60_000),
+    const user = await db.transaction(async (tx) => {
+      const [createdUser] = await tx.insert(usersTable).values({ email, passwordHash, status: "active" }).returning({ id: usersTable.id });
+      const [company] = await tx.insert(companiesTable).values({
+        ownerUserId: createdUser.id,
+        name: `${email.split("@")[0] || "Моя компания"}`,
+      }).returning({ id: companiesTable.id });
+      await tx.insert(companyMembershipsTable).values({ companyId: company.id, userId: createdUser.id, role: "owner" });
+      await tx.insert(emailVerificationTokensTable).values({
+        userId: createdUser.id, tokenHash: hashToken(token), expiresAt: new Date(Date.now() + 30 * 60_000),
+      });
+      return createdUser;
     });
     try {
       await sendVerificationEmail(email, token);
@@ -118,7 +126,9 @@ router.post("/auth/login", rateLimit, requireSameOrigin, async (req, res, next) 
     }
     const token = createOpaqueToken();
     const expiresAt = sessionExpiry();
-    await db.insert(sessionsTable).values({ userId: user.id, tokenHash: hashToken(token), expiresAt });
+    const [membership] = await db.select({ companyId: companyMembershipsTable.companyId }).from(companyMembershipsTable)
+      .where(eq(companyMembershipsTable.userId, user.id)).orderBy(companyMembershipsTable.createdAt).limit(1);
+    await db.insert(sessionsTable).values({ userId: user.id, activeCompanyId: membership?.companyId, tokenHash: hashToken(token), expiresAt });
     await db.update(usersTable).set({ lastLoginAt: new Date() }).where(eq(usersTable.id, user.id));
     res.setHeader("Set-Cookie", sessionCookie(token, Math.floor((expiresAt.getTime() - Date.now()) / 1000)));
     res.json({ user: { id: user.id, email: user.email } });

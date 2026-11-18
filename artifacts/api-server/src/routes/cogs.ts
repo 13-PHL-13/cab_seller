@@ -1,11 +1,15 @@
 
-import { and, desc, eq, or } from "drizzle-orm";
+import { and, desc, eq, inArray, or } from "drizzle-orm";
 import { Router, type IRouter, type RequestHandler } from "express";
 import { writeFile, unlink } from "node:fs/promises";
 import path from "node:path";
 import { db, cogsCostHistoryTable, cogsProductsTable, marketplaceConnectionsTable } from "@workspace/db";
 import { cogsProductMarketplacesTable } from "@workspace/db/schema";
+import { getWildberriesFinanceReport } from "../lib/marketplace-finance";
+import { getOzonFinanceReport } from "../lib/marketplace-finance-ozon";
+import { getOzonSnapshot } from "../lib/marketplace-data";
 import { requireUser } from "../middlewares/requireUser";
+import { requireCompanySection, requireCogsEditor } from "../middlewares/requireCompanyAccess";
 import { decryptCredentials } from "../lib/marketplace-credentials";
 import {
   createMediaFilename,
@@ -21,7 +25,7 @@ import {
 } from "../lib/product-media-upload";
 
 const router: IRouter = Router();
-router.use("/cogs", requireUser);
+router.use("/cogs", requireUser, requireCompanySection("products"), requireCogsEditor);
 
 type Marketplace = "ozon" | "wildberries" | "both";
 type Product = typeof cogsProductsTable.$inferSelect;
@@ -50,6 +54,11 @@ function validProductId(value: string): boolean {
 function ownerId(req: import("express").Request): string {
   if (!req.userId) throw new Error("Authenticated user is missing");
   return req.userId;
+}
+
+function companyId(req: import("express").Request): string {
+  if (!req.companyId) throw new Error("Active company is missing");
+  return req.companyId;
 }
 
 function readImages(value: string): string[] {
@@ -165,12 +174,12 @@ function parseBody(body: unknown, productId?: string): ProductInput | null {
 
 async function findOwnedProduct(
   productId: string,
-  userId: string,
+  company: string,
 ): Promise<Product | null> {
   const [product] = await db.select().from(cogsProductsTable).where(
     and(
       eq(cogsProductsTable.id, productId),
-      eq(cogsProductsTable.ownerId, userId),
+      eq(cogsProductsTable.companyId, company),
     ),
   ).limit(1);
 
@@ -189,7 +198,7 @@ const requireOwnedProductBeforeUpload: RequestHandler = (req, res, next) => {
 
   const userId = ownerId(req);
 
-  void findOwnedProduct(productId, userId)
+  void findOwnedProduct(productId, companyId(req))
     .then((product) => {
       if (!product) {
         res.status(404).json({ error: "Товар не найден." });
@@ -287,11 +296,20 @@ async function marketplaceJson(url: string, credentials: Record<string, string>,
 }
 
 const ozonCategoryCache = new Map<string, { expiresAt: number; categories: Array<Record<string, unknown>> }>();
+const minPriceSourceCache = new Map<string, { expiresAt: number; payoutRate: number; revenue: number; payout: number }>();
+type MinPriceSource = { revenue: number; payout: number; payoutRate: number } | null | { error: string };
 
-async function findMarketplaceConnection(userId: string, marketplace: "ozon" | "wildberries") {
+async function findMarketplaceConnection(req: import("express").Request, marketplace: "ozon" | "wildberries") {
+  const value = typeof req.query.storeId === "string" ? Number(req.query.storeId) : null;
+  const storeId = value && Number.isInteger(value) && value > 0 ? value : null;
+  const allowed = req.companyPermissions?.storeAccess;
+  if (storeId && Array.isArray(allowed) && !allowed.includes(String(storeId))) return undefined;
+  if (Array.isArray(allowed) && !allowed.length) return undefined;
   const [connection] = await db.select().from(marketplaceConnectionsTable).where(and(
-    eq(marketplaceConnectionsTable.ownerId, userId),
+    eq(marketplaceConnectionsTable.companyId, companyId(req)),
     eq(marketplaceConnectionsTable.marketplace, marketplace),
+    ...(storeId ? [eq(marketplaceConnectionsTable.id, storeId)] : []),
+    ...(!storeId && Array.isArray(allowed) ? [inArray(marketplaceConnectionsTable.id, allowed.map(Number))] : []),
   )).limit(1);
   return connection;
 }
@@ -323,17 +341,121 @@ function flattenOzonCategoryTree(value: unknown): Array<Record<string, unknown>>
   return result;
 }
 
+function previousCompleteMonth(): { from: string; to: string } {
+  const now = new Date();
+  const firstOfCurrent = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
+  const lastOfPrevious = new Date(firstOfCurrent.getTime() - 86_400_000);
+  const firstOfPrevious = new Date(Date.UTC(lastOfPrevious.getUTCFullYear(), lastOfPrevious.getUTCMonth(), 1));
+  return { from: firstOfPrevious.toISOString().slice(0, 10), to: lastOfPrevious.toISOString().slice(0, 10) };
+}
+
+function dateChunks(from: string, to: string, maxDays: number): Array<{ from: string; to: string }> {
+  const chunks: Array<{ from: string; to: string }> = [];
+  const cursor = new Date(`${from}T00:00:00.000Z`);
+  const final = new Date(`${to}T00:00:00.000Z`);
+  while (cursor <= final) {
+    const end = new Date(cursor.getTime() + (maxDays - 1) * 86_400_000);
+    if (end > final) end.setTime(final.getTime());
+    chunks.push({ from: cursor.toISOString().slice(0, 10), to: end.toISOString().slice(0, 10) });
+    cursor.setTime(end.getTime() + 86_400_000);
+  }
+  return chunks;
+}
+
+async function getMinPriceSource(req: import("express").Request, marketplace: "ozon" | "wildberries", from: string, to: string) {
+  const rawStoreId = typeof req.query.storeId === "string" ? Number(req.query.storeId) : null;
+  const storeId = rawStoreId && Number.isInteger(rawStoreId) && rawStoreId > 0 ? rawStoreId : null;
+  if (req.query.storeId !== undefined && !storeId) throw new Error("Выбран некорректный магазин.");
+  const allowed = req.companyPermissions?.storeAccess;
+  if (storeId && Array.isArray(allowed) && !allowed.includes(String(storeId))) throw new Error("У вашей роли нет доступа к выбранному магазину.");
+  if (Array.isArray(allowed) && !allowed.length) return null;
+  const connections = await db.select().from(marketplaceConnectionsTable).where(and(
+    eq(marketplaceConnectionsTable.companyId, companyId(req)), eq(marketplaceConnectionsTable.marketplace, marketplace),
+    ...(storeId ? [eq(marketplaceConnectionsTable.id, storeId)] : []),
+    ...(!storeId && Array.isArray(allowed) ? [inArray(marketplaceConnectionsTable.id, allowed.map(Number))] : []),
+  ));
+  let revenue = 0;
+  let payout = 0;
+  for (const connection of connections) {
+    const cacheKey = `${companyId(req)}:${connection.id}:${connection.updatedAt.getTime()}:${from}:${to}`;
+    const cached = minPriceSourceCache.get(cacheKey);
+    if (cached && cached.expiresAt > Date.now()) { revenue += cached.revenue; payout += cached.payout; continue; }
+    const credentials = decryptCredentials<Record<string, string>>(connection.credentialsCiphertext);
+    let storeRevenue = 0;
+    let storePayout = 0;
+    if (marketplace === "wildberries") {
+      const report = await getWildberriesFinanceReport(credentials.apiKey ?? "", from, to);
+      storeRevenue = report.totals.retailAmount;
+      storePayout = report.totals.sellerPayout;
+    } else {
+      const sales = await getOzonSnapshot(credentials as { clientId: string; apiKey: string }, from, to);
+      storeRevenue = [...sales.daily.values()].reduce((sum, point) => sum + point.revenue, 0);
+      const reports = [];
+      for (const period of dateChunks(from, to, 7)) reports.push(await getOzonFinanceReport(credentials as { clientId: string; apiKey: string }, period.from, period.to));
+      storePayout = reports.reduce((sum, report) => sum + report.totals.accrued, 0);
+    }
+    const payoutRate = storeRevenue > 0 ? storePayout / storeRevenue : 0;
+    minPriceSourceCache.set(cacheKey, { expiresAt: Date.now() + 6 * 60 * 60_000, payoutRate, revenue: storeRevenue, payout: storePayout });
+    revenue += storeRevenue;
+    payout += storePayout;
+    await db.update(marketplaceConnectionsTable).set({ lastSyncAt: new Date() }).where(eq(marketplaceConnectionsTable.id, connection.id));
+  }
+  return connections.length && revenue > 0 ? { revenue, payout, payoutRate: payout / revenue } : null;
+}
+
+router.get("/cogs/min-prices", async (req, res): Promise<void> => {
+  const { from, to } = previousCompleteMonth();
+  const targetMarginPercent = typeof req.query.targetMarginPercent === "string" ? Number(req.query.targetMarginPercent) : 0;
+  if (!Number.isFinite(targetMarginPercent) || targetMarginPercent < 0 || targetMarginPercent > 60) {
+    res.status(400).json({ error: "Целевая маржа должна быть от 0 до 60%." }); return;
+  }
+  try {
+    const [products, links] = await Promise.all([
+      db.select().from(cogsProductsTable).where(eq(cogsProductsTable.companyId, companyId(req))).orderBy(desc(cogsProductsTable.productName)),
+      db.select().from(cogsProductMarketplacesTable).where(eq(cogsProductMarketplacesTable.companyId, companyId(req))),
+    ]);
+    const sources: Array<["ozon" | "wildberries", MinPriceSource]> = await Promise.all(((["ozon", "wildberries"] as const).map(async (marketplace) => {
+      try { return [marketplace, await getMinPriceSource(req, marketplace, from, to)] as [typeof marketplace, MinPriceSource]; }
+      catch (error) { return [marketplace, { error: error instanceof Error ? error.message : "Не удалось получить финансовые данные." }] as [typeof marketplace, MinPriceSource]; }
+    })));
+    const sourceByMarketplace = new Map(sources);
+    const linkedByProduct = new Map<string, typeof links>();
+    for (const link of links) linkedByProduct.set(link.productId, [...(linkedByProduct.get(link.productId) ?? []), link]);
+    const targetMargin = targetMarginPercent / 100;
+    const rows = products.map((product) => {
+      const linked = linkedByProduct.get(product.id) ?? [];
+      const marketplaces = (linked.length ? linked.map((item) => item.marketplace) : product.marketplace === "both" ? ["ozon", "wildberries"] : [product.marketplace])
+        .filter((value): value is "ozon" | "wildberries" => value === "ozon" || value === "wildberries");
+      return {
+        productId: product.id, sellerSku: product.sellerSku, productName: product.productName,
+        unitCost: Number(product.unitCost), salePrice: Number(product.salePrice),
+        marketplaces: [...new Set(marketplaces)].map((marketplace) => {
+          const source = sourceByMarketplace.get(marketplace);
+          if (!source) return { marketplace, payoutRate: null, minimumPrice: null, error: "Нет финансовых данных за предыдущий полный месяц." };
+          if ("error" in source) return { marketplace, payoutRate: null, minimumPrice: null, error: source.error };
+          const effectiveRate = source.payoutRate - targetMargin;
+          return { marketplace, payoutRate: source.payoutRate, minimumPrice: effectiveRate > 0 ? Math.ceil((Number(product.unitCost) / effectiveRate) * 100) / 100 : null, error: effectiveRate > 0 ? null : "Доля выплаты ниже заданной целевой маржи." };
+        }),
+      };
+    });
+    res.json({ from, to, targetMarginPercent, formula: "unitCost / (прошломесячная выплата / выручка − целевая маржа)", rows,
+      sources: Object.fromEntries(sources.map(([marketplace, value]) => [marketplace, value && "error" in value ? { error: value.error } : value])) });
+  } catch (error) {
+    res.status(502).json({ error: error instanceof Error ? error.message : "Не удалось рассчитать минимальные цены." });
+  }
+});
+
 router.get("/cogs/ozon/categories", async (req, res): Promise<void> => {
   const userId = ownerId(req);
-  const connection = await findMarketplaceConnection(userId, "ozon");
+  const connection = await findMarketplaceConnection(req, "ozon");
   if (!connection) { res.status(409).json({ error: "Сначала подключите Ozon в настройках." }); return; }
-  const cached = ozonCategoryCache.get(userId);
+  const cached = ozonCategoryCache.get(companyId(req));
   if (cached && cached.expiresAt > Date.now()) { res.json({ categories: cached.categories }); return; }
   const credentials = decryptCredentials<Record<string, string>>(connection.credentialsCiphertext);
   const response = await marketplaceJson("https://api-seller.ozon.ru/v1/description-category/tree", credentials, { language: "RU" });
   const root = record(response["result"]);
   const categories = flattenOzonCategoryTree(array(response["result"] ?? root["children"]));
-  ozonCategoryCache.set(userId, { categories, expiresAt: Date.now() + 60 * 60 * 1000 });
+  ozonCategoryCache.set(companyId(req), { categories, expiresAt: Date.now() + 60 * 60 * 1000 });
   res.json({ categories });
 });
 
@@ -344,7 +466,7 @@ router.get("/cogs/ozon/attributes", async (req, res): Promise<void> => {
   if (!Number.isInteger(categoryId) || categoryId <= 0 || !Number.isInteger(typeId) || typeId <= 0) {
     res.status(400).json({ error: "Укажите корректные категорию и тип товара Ozon." }); return;
   }
-  const connection = await findMarketplaceConnection(userId, "ozon");
+  const connection = await findMarketplaceConnection(req, "ozon");
   if (!connection) { res.status(409).json({ error: "Сначала подключите Ozon в настройках." }); return; }
   const credentials = decryptCredentials<Record<string, string>>(connection.credentialsCiphertext);
   const response = await marketplaceJson("https://api-seller.ozon.ru/v1/description-category/attribute", credentials, {
@@ -363,7 +485,7 @@ router.get("/cogs/ozon/attribute-values", async (req, res): Promise<void> => {
   if (![descriptionCategoryId, typeId, attributeId].every((value) => Number.isInteger(value) && value > 0) || search.length < 2) {
     res.status(400).json({ error: "Укажите категорию, тип, атрибут Ozon и не менее двух символов для поиска." }); return;
   }
-  const connection = await findMarketplaceConnection(userId, "ozon");
+  const connection = await findMarketplaceConnection(req, "ozon");
   if (!connection) { res.status(409).json({ error: "Сначала подключите Ozon в настройках." }); return; }
   const credentials = decryptCredentials<Record<string, string>>(connection.credentialsCiphertext);
   const response = await marketplaceJson("https://api-seller.ozon.ru/v1/description-category/attribute/values/search", credentials, {
@@ -379,7 +501,7 @@ router.get("/cogs/ozon/attribute-values", async (req, res): Promise<void> => {
 
 router.get("/cogs/wildberries/subjects", async (req, res): Promise<void> => {
   const userId = ownerId(req);
-  const connection = await findMarketplaceConnection(userId, "wildberries");
+  const connection = await findMarketplaceConnection(req, "wildberries");
   if (!connection) { res.status(409).json({ error: "Сначала подключите Wildberries в настройках." }); return; }
   const search = typeof req.query.search === "string" ? req.query.search.trim().slice(0, 100) : "";
   if (search.length < 2) { res.status(400).json({ error: "Введите не менее двух символов для поиска предмета." }); return; }
@@ -393,7 +515,7 @@ router.get("/cogs/wildberries/subjects/:subjectId/characteristics", async (req, 
   const userId = ownerId(req);
   const subjectId = Number(Array.isArray(req.params.subjectId) ? req.params.subjectId[0] : req.params.subjectId);
   if (!Number.isInteger(subjectId) || subjectId <= 0) { res.status(400).json({ error: "Некорректный ID предмета Wildberries." }); return; }
-  const connection = await findMarketplaceConnection(userId, "wildberries");
+  const connection = await findMarketplaceConnection(req, "wildberries");
   if (!connection) { res.status(409).json({ error: "Сначала подключите Wildberries в настройках." }); return; }
   const credentials = decryptCredentials<Record<string, string>>(connection.credentialsCiphertext);
   const response = await marketplaceJson(`https://content-api.wildberries.ru/content/v2/object/charcs/${subjectId}`, credentials);
@@ -424,7 +546,7 @@ async function loadProductsForImport(marketplace: "ozon" | "wildberries", creden
           .filter((image): image is string => typeof image === "string" && /^https?:\/\//i.test(image))
           .slice(0, 5);
         const price = String(record(item["price"])["price"] ?? item["price"] ?? "0").replace(/[^\d.]/g, "");
-        result.push({ catalogSku, marketplaceSku: sku, externalProductId: String(item["id"] ?? item["product_id"] ?? ""), productName: String(item["name"] ?? sku), brand: String(item["brand"] ?? ""), description: String(item["description"] ?? ""), images, price: /^\d+(?:\.\d{1,2})?$/.test(price) ? Number(price).toFixed(2) : "0.00", marketplaceData: JSON.stringify({ offerId: sku, productId: item["id"] ?? item["product_id"] ?? "", barcode: catalogSku !== sku ? catalogSku : "", attributes: item["attributes"] ?? [] }) });
+        result.push({ catalogSku, marketplaceSku: sku, externalProductId: String(item["sku"] ?? item["id"] ?? item["product_id"] ?? ""), productName: String(item["name"] ?? sku), brand: String(item["brand"] ?? ""), description: String(item["description"] ?? ""), images, price: /^\d+(?:\.\d{1,2})?$/.test(price) ? Number(price).toFixed(2) : "0.00", marketplaceData: JSON.stringify({ offerId: sku, ozonSku: item["sku"] ?? "", productId: item["id"] ?? item["product_id"] ?? "", barcode: catalogSku !== sku ? catalogSku : "", attributes: item["attributes"] ?? [] }) });
       }
       lastId = String(listingResult["last_id"] ?? "");
       if (!lastId || items.length < 100) break;
@@ -477,10 +599,10 @@ async function loadProductsForImport(marketplace: "ozon" | "wildberries", creden
 router.get("/cogs", async (req, res): Promise<void> => {
   const userId = ownerId(req);
   const rows = await db.select().from(cogsProductsTable)
-    .where(eq(cogsProductsTable.ownerId, userId))
+    .where(eq(cogsProductsTable.companyId, companyId(req)))
     .orderBy(desc(cogsProductsTable.updatedAt));
   const links = await db.select().from(cogsProductMarketplacesTable)
-    .where(eq(cogsProductMarketplacesTable.ownerId, userId));
+    .where(eq(cogsProductMarketplacesTable.companyId, companyId(req)));
   const linksByProduct = new Map<string, typeof links>();
   for (const link of links) linksByProduct.set(link.productId, [...(linksByProduct.get(link.productId) ?? []), link]);
   res.json(rows.map((product) => {
@@ -499,10 +621,7 @@ router.post("/cogs/import/:marketplace", async (req, res): Promise<void> => {
     res.status(400).json({ error: "Неизвестная торговая площадка." });
     return;
   }
-  const [connection] = await db.select().from(marketplaceConnectionsTable).where(and(
-    eq(marketplaceConnectionsTable.ownerId, userId),
-    eq(marketplaceConnectionsTable.marketplace, marketplace),
-  )).limit(1);
+  const connection = await findMarketplaceConnection(req, marketplace);
   if (!connection) {
     res.status(409).json({ error: "Сначала подключите площадку в настройках." });
     return;
@@ -526,7 +645,7 @@ router.post("/cogs/import/:marketplace", async (req, res): Promise<void> => {
     if (item.externalProductId) matchConditions.push(eq(cogsProductMarketplacesTable.externalProductId, item.externalProductId));
     const [linked] = await db.select({ id: cogsProductMarketplacesTable.id, productId: cogsProductMarketplacesTable.productId })
       .from(cogsProductMarketplacesTable).where(and(
-        eq(cogsProductMarketplacesTable.ownerId, userId),
+        eq(cogsProductMarketplacesTable.companyId, companyId(req)),
         eq(cogsProductMarketplacesTable.marketplace, marketplace),
         or(...matchConditions),
       )).limit(1);
@@ -544,7 +663,7 @@ router.post("/cogs/import/:marketplace", async (req, res): Promise<void> => {
 
     const [sameSku] = await db.select({ id: cogsProductsTable.id })
       .from(cogsProductsTable).where(and(
-        eq(cogsProductsTable.ownerId, userId),
+        eq(cogsProductsTable.companyId, companyId(req)),
         eq(cogsProductsTable.sellerSku, item.catalogSku),
       )).limit(1);
     const product = await db.transaction(async (tx) => {
@@ -552,6 +671,7 @@ router.post("/cogs/import/:marketplace", async (req, res): Promise<void> => {
       if (!productId) {
         const [row] = await tx.insert(cogsProductsTable).values({
           ownerId: userId,
+          companyId: companyId(req),
           marketplace,
           sellerSku: item.catalogSku,
           productName: item.productName.slice(0, 240),
@@ -563,10 +683,11 @@ router.post("/cogs/import/:marketplace", async (req, res): Promise<void> => {
           publicationStatus: "imported",
         }).returning({ id: cogsProductsTable.id });
         productId = row.id;
-        await tx.insert(cogsCostHistoryTable).values({ ownerId: userId, productId, unitCost: "0.00" });
+        await tx.insert(cogsCostHistoryTable).values({ ownerId: userId, companyId: companyId(req), productId, unitCost: "0.00" });
       }
       await tx.insert(cogsProductMarketplacesTable).values({
         ownerId: userId,
+        companyId: companyId(req),
         productId,
         marketplace,
         marketplaceSku: item.marketplaceSku,
@@ -599,7 +720,7 @@ router.post("/cogs/:id/publish/:marketplace", async (req, res): Promise<void> =>
     res.status(400).json({ error: "Некорректный товар или площадка." });
     return;
   }
-  const product = await findOwnedProduct(productId, userId);
+  const product = await findOwnedProduct(productId, companyId(req));
   if (!product) { res.status(404).json({ error: "Товар не найден." }); return; }
 
   const body = record(req.body);
@@ -627,13 +748,11 @@ router.post("/cogs/:id/publish/:marketplace", async (req, res): Promise<void> =>
     res.status(400).json({ error: "Для публикации площадка должна получить общедоступные HTTPS-ссылки на фотографии." });
     return;
   }
-  const [connection] = await db.select().from(marketplaceConnectionsTable).where(and(
-    eq(marketplaceConnectionsTable.ownerId, userId), eq(marketplaceConnectionsTable.marketplace, marketplace),
-  )).limit(1);
+  const connection = await findMarketplaceConnection(req, marketplace);
   if (!connection) { res.status(409).json({ error: "Сначала подключите площадку в настройках." }); return; }
   const credentials = decryptCredentials<Record<string, string>>(connection.credentialsCiphertext);
   const [link] = await db.select().from(cogsProductMarketplacesTable).where(and(
-    eq(cogsProductMarketplacesTable.ownerId, userId),
+    eq(cogsProductMarketplacesTable.companyId, companyId(req)),
     eq(cogsProductMarketplacesTable.productId, productId),
     eq(cogsProductMarketplacesTable.marketplace, marketplace),
   )).limit(1);
@@ -688,7 +807,7 @@ router.post("/cogs/:id/publish/:marketplace", async (req, res): Promise<void> =>
   try { existingData = link ? record(JSON.parse(link.marketplaceData || "{}")) : {}; } catch { /* replace malformed legacy metadata */ }
   const savedData = JSON.stringify({ ...existingData, ...configuration });
   await db.insert(cogsProductMarketplacesTable).values({
-    ownerId: userId, productId, marketplace, marketplaceSku, externalProductId,
+    ownerId: userId, companyId: companyId(req), productId, marketplace, marketplaceSku, externalProductId,
     publicationStatus: "submitted", lastPublishedAt: new Date(), marketplaceData: savedData,
   }).onConflictDoUpdate({
     target: [cogsProductMarketplacesTable.productId, cogsProductMarketplacesTable.marketplace],
@@ -701,12 +820,12 @@ router.post("/cogs/:id/publish/wildberries/media", async (req, res): Promise<voi
   const userId = ownerId(req);
   const productId = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
   if (!validProductId(productId)) { res.status(400).json({ error: "Некорректный товар." }); return; }
-  const product = await findOwnedProduct(productId, userId);
+  const product = await findOwnedProduct(productId, companyId(req));
   if (!product) { res.status(404).json({ error: "Товар не найден." }); return; }
-  const connection = await findMarketplaceConnection(userId, "wildberries");
+  const connection = await findMarketplaceConnection(req, "wildberries");
   if (!connection) { res.status(409).json({ error: "Сначала подключите Wildberries в настройках." }); return; }
   const [link] = await db.select().from(cogsProductMarketplacesTable).where(and(
-    eq(cogsProductMarketplacesTable.ownerId, userId),
+    eq(cogsProductMarketplacesTable.companyId, companyId(req)),
     eq(cogsProductMarketplacesTable.productId, productId),
     eq(cogsProductMarketplacesTable.marketplace, "wildberries"),
   )).limit(1);
@@ -745,7 +864,7 @@ router.get("/cogs/:id/history", async (req, res): Promise<void> => {
     return;
   }
 
-  const product = await findOwnedProduct(productId, userId);
+  const product = await findOwnedProduct(productId, companyId(req));
 
   if (!product) {
     res.status(404).json({ error: "Товар не найден." });
@@ -755,7 +874,7 @@ router.get("/cogs/:id/history", async (req, res): Promise<void> => {
   const rows = await db.select().from(cogsCostHistoryTable)
     .where(and(
       eq(cogsCostHistoryTable.productId, productId),
-      eq(cogsCostHistoryTable.ownerId, userId),
+      eq(cogsCostHistoryTable.companyId, companyId(req)),
     ))
     .orderBy(desc(cogsCostHistoryTable.effectiveAt));
 
@@ -776,7 +895,7 @@ router.post("/cogs", async (req, res): Promise<void> => {
   const [existing] = await db.select({ id: cogsProductsTable.id })
     .from(cogsProductsTable)
     .where(and(
-      eq(cogsProductsTable.ownerId, userId),
+      eq(cogsProductsTable.companyId, companyId(req)),
       eq(cogsProductsTable.marketplace, parsed.marketplace),
       eq(cogsProductsTable.sellerSku, parsed.sellerSku),
     ))
@@ -789,17 +908,19 @@ router.post("/cogs", async (req, res): Promise<void> => {
 
   const [created] = await db.transaction(async (tx) => {
     const [product] = await tx.insert(cogsProductsTable)
-      .values({ ownerId: userId, ...productValues })
+      .values({ ownerId: userId, companyId: companyId(req), ...productValues })
       .returning();
 
     await tx.insert(cogsCostHistoryTable).values({
       ownerId: userId,
+      companyId: companyId(req),
       productId: product.id,
       unitCost: parsed.unitCost,
     });
 
     await tx.insert(cogsProductMarketplacesTable).values(marketplaces.map((marketplace) => ({
       ownerId: userId,
+      companyId: companyId(req),
       productId: product.id,
       marketplace,
       marketplaceSku: marketplaceSkus[marketplace] || parsed.sellerSku,
@@ -833,7 +954,7 @@ router.put("/cogs/:id", async (req, res): Promise<void> => {
 
   const userId = ownerId(req);
   const { marketplaces, marketplaceSkus, ...productValues } = parsed;
-  const existing = await findOwnedProduct(productId, userId);
+  const existing = await findOwnedProduct(productId, companyId(req));
 
   if (!existing) {
     res.status(404).json({ error: "Товар не найден." });
@@ -843,7 +964,7 @@ router.put("/cogs/:id", async (req, res): Promise<void> => {
   const [conflict] = await db.select({ id: cogsProductsTable.id })
     .from(cogsProductsTable)
     .where(and(
-      eq(cogsProductsTable.ownerId, userId),
+      eq(cogsProductsTable.companyId, companyId(req)),
       eq(cogsProductsTable.marketplace, parsed.marketplace),
       eq(cogsProductsTable.sellerSku, parsed.sellerSku),
     ))
@@ -859,13 +980,14 @@ router.put("/cogs/:id", async (req, res): Promise<void> => {
       .set({ ...productValues, updatedAt: new Date() })
       .where(and(
         eq(cogsProductsTable.id, existing.id),
-        eq(cogsProductsTable.ownerId, userId),
+        eq(cogsProductsTable.companyId, companyId(req)),
       ))
       .returning();
 
     if (existing.unitCost !== parsed.unitCost) {
       await tx.insert(cogsCostHistoryTable).values({
         ownerId: userId,
+        companyId: companyId(req),
         productId: existing.id,
         unitCost: parsed.unitCost,
       });
@@ -881,7 +1003,7 @@ router.put("/cogs/:id", async (req, res): Promise<void> => {
     for (const marketplace of marketplaces) {
       const marketplaceSku = marketplaceSkus[marketplace] || parsed.sellerSku;
       await tx.insert(cogsProductMarketplacesTable).values({
-        ownerId: userId, productId: existing.id, marketplace, marketplaceSku,
+        ownerId: userId, companyId: companyId(req), productId: existing.id, marketplace, marketplaceSku,
       }).onConflictDoUpdate({
         target: [cogsProductMarketplacesTable.productId, cogsProductMarketplacesTable.marketplace],
         set: { marketplaceSku, updatedAt: new Date() },
@@ -910,7 +1032,7 @@ router.post(
     }
 
     const userId = ownerId(req);
-    const product = await findOwnedProduct(productId, userId);
+    const product = await findOwnedProduct(productId, companyId(req));
 
     if (!product) {
       res.status(404).json({ error: "Товар не найден." });
@@ -956,7 +1078,7 @@ router.post(
         })
         .where(and(
           eq(cogsProductsTable.id, productId),
-          eq(cogsProductsTable.ownerId, userId),
+          eq(cogsProductsTable.companyId, companyId(req)),
         ))
         .returning();
 
@@ -988,7 +1110,7 @@ router.post(
     }
 
     const userId = ownerId(req);
-    const product = await findOwnedProduct(productId, userId);
+    const product = await findOwnedProduct(productId, companyId(req));
 
     if (!product) {
       res.status(404).json({ error: "Товар не найден." });
@@ -1021,7 +1143,7 @@ router.post(
         })
         .where(and(
           eq(cogsProductsTable.id, productId),
-          eq(cogsProductsTable.ownerId, userId),
+          eq(cogsProductsTable.companyId, companyId(req)),
         ))
         .returning();
 
@@ -1052,7 +1174,7 @@ router.get("/cogs/:id/media/:filename", async (req, res, next): Promise<void> =>
   }
 
   const userId = ownerId(req);
-  const product = await findOwnedProduct(productId, userId);
+  const product = await findOwnedProduct(productId, companyId(req));
 
   if (!product) {
     res.status(404).json({ error: "Товар не найден." });
@@ -1093,7 +1215,7 @@ router.delete("/cogs/:id/media", async (req, res): Promise<void> => {
   }
 
   const userId = ownerId(req);
-  const product = await findOwnedProduct(productId, userId);
+  const product = await findOwnedProduct(productId, companyId(req));
 
   if (!product) {
     res.status(404).json({ error: "Товар не найден." });
@@ -1134,7 +1256,7 @@ router.delete("/cogs/:id/media", async (req, res): Promise<void> => {
     })
     .where(and(
       eq(cogsProductsTable.id, productId),
-      eq(cogsProductsTable.ownerId, userId),
+      eq(cogsProductsTable.companyId, companyId(req)),
     ))
     .returning();
 
@@ -1156,7 +1278,7 @@ router.delete("/cogs/:id", async (req, res): Promise<void> => {
   const deleted = await db.delete(cogsProductsTable)
     .where(and(
       eq(cogsProductsTable.id, productId),
-      eq(cogsProductsTable.ownerId, userId),
+      eq(cogsProductsTable.companyId, companyId(req)),
     ))
     .returning({ id: cogsProductsTable.id });
 

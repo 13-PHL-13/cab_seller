@@ -3,8 +3,9 @@ import { ExternalLink, Eye, EyeOff, Info, KeyRound, RefreshCw, ShieldCheck, User
 import { API_PLATFORMS, loadSettings, saveSettings } from '@/data/settings';
 import type { AppSettings } from '@/data/settings';
 import { timeAgo } from '@/lib/format';
-import { connectMarketplace, disconnectMarketplace, getMarketplaceConnections, getMarketplaceDashboard, formatApiError, getAiAssistantConfig, fetchAiModels, saveAiAssistantConfig, disconnectAiAssistant } from '@/lib/marketplace-api';
+import { connectMarketplace, disconnectMarketplace, deleteMarketplaceStore, getMarketplaceConnections, getMarketplaceStores, getMarketplaceDashboard, formatApiError, getAiAssistantConfig, fetchAiModels, saveAiAssistantConfig, disconnectAiAssistant } from '@/lib/marketplace-api';
 import type { MarketplaceId } from '@/lib/marketplace-api';
+import type { MarketplaceStore } from '@/lib/marketplace-api';
 
 type Tab = 'api' | 'ai' | 'profile' | 'notifications';
 
@@ -23,6 +24,8 @@ export default function SettingsPage() {
   const [showSecret, setShowSecret] = useState<Record<string, boolean>>({});
   const [busy, setBusy] = useState<string | null>(null);
   const [connectionErrors, setConnectionErrors] = useState<Record<string, string>>({});
+  const [stores, setStores] = useState<MarketplaceStore[]>([]);
+  const [storeNames, setStoreNames] = useState<Record<string, string>>({ ozon: '', wb: '' });
   const [aiConfig, setAiConfig] = useState({ baseUrl: '', apiKey: '', model: '', configured: false, apiKeyConfigured: false });
   const [aiProvider, setAiProvider] = useState('custom');
   const [aiModels, setAiModels] = useState<string[]>([]);
@@ -34,7 +37,8 @@ export default function SettingsPage() {
 
   const refreshConnections = async () => {
     try {
-      const rows = await getMarketplaceConnections();
+      const [rows, storeRows] = await Promise.all([getMarketplaceConnections(), getMarketplaceStores()]);
+      setStores(storeRows.stores);
       setSettings((current) => ({
         ...current,
         connections: {
@@ -118,8 +122,8 @@ export default function SettingsPage() {
       await connectMarketplace(
         pid as MarketplaceId,
         pid === 'ozon'
-          ? { clientId: credentials.clientId ?? '', apiKey: credentials.apiKey ?? '' }
-          : { apiKey: credentials.apiKey ?? '' },
+          ? { clientId: credentials.clientId ?? '', apiKey: credentials.apiKey ?? '', storeName: storeNames.ozon }
+          : { apiKey: credentials.apiKey ?? '', storeName: storeNames.wb },
       );
       await refreshConnections();
       setSettings((current) => {
@@ -144,7 +148,9 @@ export default function SettingsPage() {
     if (pid !== 'ozon' && pid !== 'wb') return;
     setBusy(pid);
     try {
-      await disconnectMarketplace(pid as MarketplaceId);
+      const ids = stores.filter((store) => store.marketplace === (pid === 'ozon' ? 'ozon' : 'wildberries')).map((store) => store.id);
+      if (ids.length) await Promise.all(ids.map((id) => deleteMarketplaceStore(id)));
+      else await disconnectMarketplace(pid as MarketplaceId);
       await refreshConnections();
     } catch (error) {
       setConnectionErrors((current) => ({ ...current, [pid]: formatApiError(error) }));
@@ -232,10 +238,7 @@ export default function SettingsPage() {
                           <span style={{ width: 7, height: 7, borderRadius: 99, background: 'var(--green)', display: 'inline-block' }} />
                           Синхронизация: {conn.syncedAt ? timeAgo(Math.floor((Date.now() - conn.syncedAt) / 1000)) : '…'}
                         </span>
-                        <button className="btn btn-danger btn-sm" onClick={() => void disconnect(p.id)} disabled={busy === p.id}>
-                          <X size={13} />
-                          Отключить
-                        </button>
+                        <span className="badge badge-green">Магазинов: {stores.filter((store) => store.marketplace === (p.id === 'ozon' ? 'ozon' : 'wildberries')).length}</span>
                       </>
                     ) : (
                       <button
@@ -252,6 +255,10 @@ export default function SettingsPage() {
 
                 {connectionErrors[p.id] ? <div className="info-banner" role="alert">{connectionErrors[p.id]}</div> : null}
               <div className="conn-fields">
+                  <div className="field">
+                    <label>Название магазина</label>
+                    <input className="input" placeholder={`Магазин ${p.name}`} value={storeNames[p.id === 'ozon' ? 'ozon' : 'wb']} onChange={(e) => setStoreNames((current) => ({ ...current, [p.id === 'ozon' ? 'ozon' : 'wb']: e.target.value }))} maxLength={120} />
+                  </div>
                   {p.fields.filter((f) => p.id === 'ozon' || f.key !== 'clientId').map((f) => (
                     <div className="field" key={f.key}>
                       <label>{f.label}</label>
@@ -283,12 +290,13 @@ export default function SettingsPage() {
                     Документация API
                   </a>
                   {conn.connected ? (
-                    <button className="link" style={{ background: 'none', border: 0, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 6 }} onClick={() => void syncNow(p.id)}>
-                      <RefreshCw size={13} />
-                      Синхронизировать сейчас
-                    </button>
+                    <>
+                      <button className="link" style={{ background: 'none', border: 0, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 6 }} onClick={() => void syncNow(p.id)}><RefreshCw size={13} /> Синхронизировать сейчас</button>
+                      <button className="btn btn-primary btn-sm" onClick={() => void connect(p.id)} disabled={busy === p.id || !(p.id === 'ozon' ? (conn.credentials.clientId ?? '').trim() && (conn.credentials.apiKey ?? '').trim() : (conn.credentials.apiKey ?? '').trim())}><Check size={13} /> {busy === p.id ? 'Проверка…' : 'Добавить магазин'}</button>
+                    </>
                   ) : null}
                 </div>
+                {stores.filter((store) => store.marketplace === (p.id === 'ozon' ? 'ozon' : 'wildberries')).map((store) => <div key={store.id} className="conn-actions" style={{ borderTop: '1px solid var(--border)', paddingTop: 10 }}><span><strong>{store.storeName}</strong>{store.lastSyncAt ? ` · Синхронизация ${timeAgo(Math.floor((Date.now() - new Date(store.lastSyncAt).getTime()) / 1000))}` : ''}</span><button className="btn btn-danger btn-sm" onClick={() => void deleteMarketplaceStore(store.id).then(refreshConnections)}><X size={13} /> Отключить</button></div>)}
               </div>
             );
           })}

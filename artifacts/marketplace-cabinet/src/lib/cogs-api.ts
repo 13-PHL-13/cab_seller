@@ -36,6 +36,11 @@ export interface CogsHistoryEntry {
   effectiveAt: string;
 }
 
+export interface CogsMinPriceResult {
+  from: string; to: string; targetMarginPercent: number; formula: string;
+  rows: Array<{ productId: string; sellerSku: string; productName: string; unitCost: number; salePrice: number; marketplaces: Array<{ marketplace: "ozon" | "wildberries"; payoutRate: number | null; minimumPrice: number | null; error: string | null }> }>;
+}
+
 export interface OzonCategoryType {
   categoryId: number;
   typeId: number;
@@ -88,6 +93,13 @@ export function getWildberriesSubjectCharacteristics(subjectId: number): Promise
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  const selectedStoreId = localStorage.getItem("navigator-active-store-id") ?? "";
+  if (selectedStoreId) {
+    const [pathname, search = ""] = path.split("?", 2);
+    const query = new URLSearchParams(search);
+    query.set("storeId", selectedStoreId);
+    path = `${pathname}?${query.toString()}`;
+  }
   const isFormData = typeof FormData !== "undefined" && init?.body instanceof FormData;
 
   const response = await fetch(path, {
@@ -115,6 +127,11 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
 export function listCogsProducts(): Promise<CogsProduct[]> {
   return request("/api/cogs");
+}
+
+export function getCogsMinPrices(targetMarginPercent: number): Promise<CogsMinPriceResult> {
+  const query = new URLSearchParams({ targetMarginPercent: String(targetMarginPercent) });
+  return request(`/api/cogs/min-prices?${query}`);
 }
 
 export function importMarketplaceProducts(marketplace: "ozon" | "wildberries"): Promise<{ imported: number; existing: number }> {

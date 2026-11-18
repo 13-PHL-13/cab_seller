@@ -12,7 +12,7 @@ import {
 import { formatMoney, formatNumber } from "@/lib/format";
 import {
   formatApiError, getMarketplaceConnections, getMarketplaceDashboard,
-  getAiAssistantConfig, sendAiAssistantMessage,
+  getAiAssistantConfig, getAiAssistantChat, startAiAssistantChat, sendAiAssistantMessage,
   getOzonFinanceReport, getWildberriesFinanceReport, getSellerExpenses,
   createSellerExpense, deleteSellerExpense,
 } from "@/lib/marketplace-api";
@@ -83,6 +83,7 @@ export default function DashboardPage() {
   const [chatInput, setChatInput] = useState("");
   const [aiConfig, setAiConfig] = useState<{ configured: boolean; model: string } | null>(null);
   const [chatBusy, setChatBusy] = useState(false);
+  const [aiConversationId, setAiConversationId] = useState<string | null>(null);
   const [messages, setMessages] = useState<Array<{ role: "assistant" | "user"; text: string }>>([
     { role: "assistant", text: "Здравствуйте! Задайте вопрос о данных подключённых магазинов." },
   ]);
@@ -90,6 +91,10 @@ export default function DashboardPage() {
   useEffect(() => {
     void getAiAssistantConfig().then((config) => setAiConfig({ configured: config.configured, model: config.model }))
       .catch(() => setAiConfig({ configured: false, model: "" }));
+    void getAiAssistantChat().then((chat) => {
+      setAiConversationId(chat.conversationId);
+      if (chat.messages.length) setMessages(chat.messages.map(({ role, content }) => ({ role, text: content })));
+    }).catch(() => undefined);
   }, []);
 
   useEffect(() => {
@@ -187,10 +192,20 @@ export default function DashboardPage() {
     { label: "Средний чек", value: data && data.averageOrderValue > 0 ? formatMoney(data.averageOrderValue) : "—", icon: Wallet },
   ];
   const wbCost = wildberriesFinance?.catalogCost;
+  const ozonCost = ozonFinance?.catalogCost;
   const wbCostComplete = Boolean(wildberriesFinance && wbCost && wildberriesFinance.soldItems.length > 0 && wbCost.unmatchedUnits === 0);
   const wbMargin = wbCostComplete && wildberriesFinance && wbCost
     ? wildberriesFinance.totals.sellerPayout - wbCost.costOfGoods
     : null;
+  const ozonCostComplete = Boolean(ozonFinance && ozonCost && ozonFinance.soldItems.length > 0 && ozonCost.unmatchedUnits === 0);
+  const ozonMargin = ozonCostComplete && ozonFinance && ozonCost
+    ? ozonFinance.totals.accrued - ozonCost.costOfGoods
+    : null;
+  const totalMargin = wbMargin !== null || ozonMargin !== null
+    ? (wbMargin ?? 0) + (ozonMargin ?? 0)
+    : null;
+  const payoutForMargin = (wbMargin !== null ? wildberriesFinance?.totals.sellerPayout ?? 0 : 0)
+    + (ozonMargin !== null ? ozonFinance?.totals.accrued ?? 0 : 0);
   const manuallyTrackedAds = sellerExpenses?.expenses
     .filter((expense) => ["реклама", "продвижение", "ads"].includes(expense.category.trim().toLocaleLowerCase("ru-RU")))
     .reduce((sum, expense) => sum + Number(expense.amount), 0);
@@ -222,7 +237,9 @@ export default function DashboardPage() {
       const result = await sendAiAssistantMessage(
         conversation.slice(-10).map((item) => ({ role: item.role, content: item.text })),
         context,
+        aiConversationId,
       );
+      setAiConversationId(result.conversationId);
       setMessages((current) => [...current, { role: "assistant", text: result.answer }]);
     } catch (error) {
       setMessages((current) => [...current, { role: "assistant", text: `Не удалось получить ответ: ${formatApiError(error)}` }]);
@@ -265,7 +282,7 @@ export default function DashboardPage() {
           <div className="approved-market-legend">
             <span><MarketDot marketplace="wildberries" /> Wildberries</span>
             <span><MarketDot marketplace="ozon" /> Ozon</span>
-            <span className="approved-connection-count">{connected.length} из 2 площадок подключено</span>
+            <span className="approved-connection-count">Ключи сохранены: {connected.length} из 2</span>
           </div>
         </header>
 
@@ -358,6 +375,9 @@ export default function DashboardPage() {
                   {[ ["Проводки", ozonFinance.totals.posting], ["Товарные операции", ozonFinance.totals.item], ["Нетоварные операции", ozonFinance.totals.nonItem], ["Контейнерные сборы", ozonFinance.totals.containerFees], ["Прочее", ozonFinance.totals.other] ].map(([label, amount]) => <div key={String(label)}><span>{label}</span><b>{formatMoney(Number(amount))}</b></div>)}
                 </div>
                 {ozonFinance.totals.missingAmountRows > 0 && <p>{ozonFinance.totals.missingAmountRows} операций без суммы пропущено.</p>}
+                {ozonFinance.catalogCost && <p>{ozonFinance.soldItems.length === 0
+                  ? ozonFinance.productSalesError ?? "В отчёте Ozon не найдены товары по SKU за выбранный период."
+                  : `${ozonFinance.productSalesMetric === "ordered_units" ? "Заказано по SKU" : "Товарных строк"}: ${ozonFinance.soldItems.length}; сопоставлено ${formatNumber(ozonFinance.catalogCost.matchedUnits)} шт.; без пары в каталоге ${formatNumber(ozonFinance.catalogCost.unmatchedUnits)} шт.${ozonFinance.productSalesMetric === "ordered_units" ? " Себестоимость заказанного — ориентир, не подтверждённая себестоимость выкупленных товаров." : ""}`}</p>}
               </article>}
               {wildberriesFinance && <article className="approved-finance-card approved-finance-report">
                 <div className="approved-finance-head"><h3><MarketDot marketplace="wildberries" /> Wildberries · отчёт реализации</h3><span>{financeLoading ? "Обновляем…" : `${wildberriesFinance.rowsCount} строк`}</span></div>
@@ -369,23 +389,27 @@ export default function DashboardPage() {
               </article>}
               {!financeLoading && !ozonFinance && !wildberriesFinance && !financeErrors.length && <div className="approved-empty">Подключите площадку с доступом к финансовым отчётам.</div>}
               {DERIVED_FINANCE_ITEMS.map((item) => {
-                const value = item.key === "cost" && wbCost && wildberriesFinance?.soldItems.length
-                  ? formatMoney(wbCost.costOfGoods)
+                const value = item.key === "cost" && ((wbCost && wildberriesFinance?.soldItems.length) || (ozonCost && ozonFinance?.soldItems.length))
+                  ? formatMoney((wbCost?.costOfGoods ?? 0) + (ozonCost?.costOfGoods ?? 0))
                   : item.key === "ads" && manuallyTrackedAds !== undefined
                     ? formatMoney(manuallyTrackedAds)
-                  : item.key === "margin" && wbMargin !== null
-                    ? formatMoney(wbMargin)
-                    : item.key === "profitability" && wbMargin !== null && (wildberriesFinance?.totals.sellerPayout ?? 0) !== 0
-                      ? `${((wbMargin / wildberriesFinance!.totals.sellerPayout) * 100).toFixed(1)}%`
+                  : item.key === "margin" && totalMargin !== null
+                    ? formatMoney(totalMargin)
+                    : item.key === "profitability" && totalMargin !== null && payoutForMargin !== 0
+                      ? `${((totalMargin / payoutForMargin) * 100).toFixed(1)}%`
                       : "—";
-                const note = item.key === "cost" && wbCost && wildberriesFinance?.soldItems.length
-                  ? `Wildberries: учтено ${formatNumber(wbCost.matchedUnits)} шт.${wbCost.unmatchedUnits ? `, без сопоставления ${formatNumber(wbCost.unmatchedUnits)} шт.` : ""}.`
+                const note = item.key === "cost" && (wildberriesFinance || ozonFinance)
+                  ? `WB сопоставлено ${formatNumber(wbCost?.matchedUnits ?? 0)} шт., без пары ${formatNumber(wbCost?.unmatchedUnits ?? 0)} шт.; Ozon сопоставлено ${formatNumber(ozonCost?.matchedUnits ?? 0)} шт., без пары ${formatNumber(ozonCost?.unmatchedUnits ?? 0)} шт.${ozonFinance && ozonFinance.soldItems.length === 0 ? " Ozon не вернул товарные строки с артикулами/SKU и количеством." : ""}`
                   : item.key === "ads" && manuallyTrackedAds !== undefined
                     ? "Сумма из расходов продавца с категорией «Реклама» или «Продвижение». Добавляйте рекламные траты в форме ниже."
-                  : item.key === "margin" && wbMargin !== null
-                    ? "Wildberries: к выплате продавцу минус себестоимость. Дополнительные расходы и реклама сюда не включены."
-                    : item.key === "profitability" && wbMargin !== null
-                      ? "Wildberries: маржа разделена на сумму к выплате продавцу."
+                  : item.key === "margin" && totalMargin !== null
+                    ? ozonFinance?.productSalesMetric === "ordered_units"
+                      ? "Предварительно: начисления Ozon минус себестоимость заказанных единиц по SKU. Это оценка, не подтверждённая прибыль по выкупам; фактические возвраты и отмены могут изменить результат."
+                      : "WB: выплата продавцу минус себестоимость; Ozon: начисления за вычетом сопоставленной себестоимости. Учтены только товары с полным сопоставлением."
+                  : item.key === "profitability" && totalMargin !== null
+                      ? ozonFinance?.productSalesMetric === "ordered_units"
+                        ? "Предварительная маржа разделена на начисления Ozon; расчёт станет фактическим, когда будут доступны выкупы и возвраты по SKU."
+                        : "Маржа разделена на сумму выплат и начислений по площадкам, где удалось полностью сопоставить товары."
                       : item.note;
                 return <article className="approved-finance-card" key={item.key}>
                   <div className="approved-finance-head"><h3>{item.label}</h3><button aria-label={`Подробнее: ${item.label}`} onClick={() => toggleFinance(item.key)}>{expandedFinance.includes(item.key) ? <ChevronUp size={15} /> : <ChevronDown size={15} />}</button></div>
@@ -425,8 +449,11 @@ export default function DashboardPage() {
           <div className="approved-stores">
             {connections.map((connection) => {
               const amount = revenueByMarket[connection.marketplace];
+              const analyticsRateLimited = Boolean(connection.storeName && data?.partialErrors.some((message) =>
+                message.startsWith(`${connection.storeName}:`) && /429|ограничил запросы/i.test(message),
+              ));
               return <article className="approved-store-card" key={connection.marketplace}>
-                <div className="approved-store-title"><MarketDot marketplace={connection.marketplace} /><div><h3>{connection.storeName || marketLabel(connection.marketplace)}</h3><span>{marketLabel(connection.marketplace)}</span></div><span className={connection.connected ? "approved-status connected" : "approved-status"}>{connection.connected ? "Подключено" : "Не подключено"}</span></div>
+                <div className="approved-store-title"><MarketDot marketplace={connection.marketplace} /><div><h3>{connection.storeName || marketLabel(connection.marketplace)}</h3><span>{marketLabel(connection.marketplace)}</span></div><span className={`approved-status ${analyticsRateLimited ? "rate-limited" : connection.connected ? "connected" : ""}`}>{analyticsRateLimited ? "Лимит аналитики" : connection.connected ? "Ключ сохранён" : "Не подключено"}</span></div>
                 <div className="approved-store-revenue"><span>Выручка за выбранный отрезок графика</span><strong>{connection.connected ? formatMoney(amount) : "—"}</strong></div>
                 <div className="approved-store-bottom"><span>Последняя синхронизация</span><span>{connection.lastSyncAt ? new Date(connection.lastSyncAt).toLocaleString("ru-RU") : "Нет данных"}</span></div>
                 {!connection.connected && <Link href="/settings" className="approved-text-link">Подключить API →</Link>}
@@ -442,7 +469,7 @@ export default function DashboardPage() {
         <div className="approved-assistant-head">
           <div><Bot size={18} /><strong>ИИ-помощник</strong></div>
           <div className="approved-assistant-actions">
-            <button title="Новый чат" aria-label="Новый чат" onClick={() => setMessages([{ role: "assistant", text: "Новый диалог. Задайте вопрос о данных подключённых магазинов." }])} disabled={chatBusy}><Activity size={16} /></button>
+            <button title="Новый чат" aria-label="Новый чат" onClick={() => { setAiConversationId(null); setMessages([{ role: "assistant", text: "Новый диалог. Задайте вопрос о данных подключённых магазинов." }]); }} disabled={chatBusy}><Activity size={16} /></button>
             <button title="Скрыть панель" aria-label="Скрыть панель" onClick={() => setChatOpen(false)}><X size={16} /></button>
           </div>
         </div>

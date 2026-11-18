@@ -87,3 +87,13 @@ export async function sendPasswordResetEmail(email: string, token: string): Prom
     "", "Ссылка действует 30 минут. Если вы не запрашивали сброс, проигнорируйте это письмо.",
   ]);
 }
+
+export async function sendCompanyInvitationEmail(email: string, token: string, companyName: string): Promise<void> {
+  const origin = required("APP_ORIGIN").replace(/\/$/, "");
+  const link = `${origin}/invitations/accept?token=${encodeURIComponent(token)}`;
+  await sendMail(email, `Приглашение в компанию ${companyName} — Навигатор продаж`, [
+    "Здравствуйте!", `Вас пригласили в компанию «${companyName}» в Навигаторе продаж.`,
+    "Войдите или зарегистрируйтесь с этим адресом электронной почты, затем откройте ссылку:", link,
+    "", "Ссылка действует 7 дней. Если вы не ожидали приглашение, проигнорируйте это письмо.",
+  ]);
+}

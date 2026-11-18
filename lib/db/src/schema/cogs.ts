@@ -1,11 +1,13 @@
 import { index, numeric, pgTable, text, timestamp, uniqueIndex, uuid } from "drizzle-orm/pg-core";
 import { usersTable } from "./auth";
+import { companiesTable } from "./workspace";
 
 export const cogsProductsTable = pgTable(
   "cogs_products",
   {
     id: uuid("id").defaultRandom().primaryKey(),
     ownerId: uuid("owner_id").notNull().references(() => usersTable.id, { onDelete: "cascade" }),
+    companyId: uuid("company_id").notNull().references(() => companiesTable.id, { onDelete: "cascade" }),
     marketplace: text("marketplace").notNull().default("both"),
     sellerSku: text("seller_sku").notNull(),
     productName: text("product_name").notNull(),
@@ -24,7 +26,8 @@ export const cogsProductsTable = pgTable(
     updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow().$onUpdate(() => new Date()),
   },
   (table) => [
-    uniqueIndex("cogs_products_owner_marketplace_sku_unique").on(table.ownerId, table.marketplace, table.sellerSku),
+    uniqueIndex("cogs_products_company_marketplace_sku_unique").on(table.companyId, table.marketplace, table.sellerSku),
+    index("cogs_products_company_idx").on(table.companyId),
     index("cogs_products_owner_idx").on(table.ownerId),
   ],
 );
@@ -34,6 +37,7 @@ export const cogsCostHistoryTable = pgTable(
   {
     id: uuid("id").defaultRandom().primaryKey(),
     ownerId: uuid("owner_id").notNull().references(() => usersTable.id, { onDelete: "cascade" }),
+    companyId: uuid("company_id").notNull().references(() => companiesTable.id, { onDelete: "cascade" }),
     productId: uuid("product_id").notNull().references(() => cogsProductsTable.id, { onDelete: "cascade" }),
     unitCost: numeric("unit_cost", { precision: 14, scale: 2 }).notNull(),
     effectiveAt: timestamp("effective_at", { withTimezone: true }).notNull().defaultNow(),
@@ -41,6 +45,7 @@ export const cogsCostHistoryTable = pgTable(
   },
   (table) => [
     index("cogs_cost_history_owner_product_idx").on(table.ownerId, table.productId, table.effectiveAt),
+    index("cogs_cost_history_company_product_idx").on(table.companyId, table.productId, table.effectiveAt),
   ],
 );
 
@@ -50,6 +55,7 @@ export const cogsProductMarketplacesTable = pgTable(
   {
     id: uuid("id").defaultRandom().primaryKey(),
     ownerId: uuid("owner_id").notNull().references(() => usersTable.id, { onDelete: "cascade" }),
+    companyId: uuid("company_id").notNull().references(() => companiesTable.id, { onDelete: "cascade" }),
     productId: uuid("product_id").notNull().references(() => cogsProductsTable.id, { onDelete: "cascade" }),
     marketplace: text("marketplace").notNull(),
     marketplaceSku: text("marketplace_sku").notNull().default(""),
@@ -63,7 +69,7 @@ export const cogsProductMarketplacesTable = pgTable(
   },
   (table) => [
     uniqueIndex("cogs_product_marketplaces_product_marketplace_unique").on(table.productId, table.marketplace),
-    uniqueIndex("cogs_product_marketplaces_owner_marketplace_sku_unique").on(table.ownerId, table.marketplace, table.marketplaceSku),
-    index("cogs_product_marketplaces_owner_idx").on(table.ownerId, table.marketplace),
+    uniqueIndex("cogs_product_marketplaces_company_marketplace_sku_unique").on(table.companyId, table.marketplace, table.marketplaceSku),
+    index("cogs_product_marketplaces_company_idx").on(table.companyId, table.marketplace),
   ],
 );

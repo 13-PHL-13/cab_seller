@@ -10,11 +10,12 @@ import {
   GetMarketplaceDashboardResponse,
   ListMarketplaceConnectionsResponse,
 } from "@workspace/api-zod";
-import { db, cogsProductsTable, marketplaceConnectionsTable, sellerExpensesTable } from "@workspace/db";
+import { db, aiConversationsTable, aiMessagesTable, cogsProductsTable, marketplaceConnectionsTable, sellerExpensesTable } from "@workspace/db";
 import { cogsProductMarketplacesTable } from "@workspace/db/schema";
-import { and, desc, eq, gte, lte } from "drizzle-orm";
+import { and, asc, desc, eq, gte, inArray, lte } from "drizzle-orm";
 import { Router, type IRouter } from "express";
 import { requireUser } from "../middlewares/requireUser";
+import { requireCompanyFinance, requireCompanySection, requireMarketplaceAccess } from "../middlewares/requireCompanyAccess";
 import {
   decryptCredentials,
   encryptCredentials,
@@ -99,6 +100,13 @@ async function getCachedSnapshot(
 
 const router: IRouter = Router();
 router.use("/marketplace", requireUser);
+router.use("/marketplace/finance", requireCompanyFinance);
+router.use("/marketplace/dashboard", requireCompanySection("dashboard"));
+router.use("/marketplace/connections", requireMarketplaceAccess);
+router.use("/marketplace/stores", requireMarketplaceAccess);
+router.use("/marketplace/ai-config", requireCompanySection("settings"));
+router.use("/marketplace/ai-models", requireCompanySection("settings"));
+router.use("/marketplace/ai-chat", requireCompanySection("dashboard"));
 
 function normalizeAiBaseUrl(value: unknown): string | null {
   if (typeof value !== "string" || value.trim().length > 500) return null;
@@ -202,7 +210,7 @@ async function requestAiCompletion(
 router.get("/marketplace/ai-config", async (req, res): Promise<void> => {
   const ownerId = userIdFromRequest(req);
   const [row] = await db.select().from(marketplaceConnectionsTable).where(and(
-    eq(marketplaceConnectionsTable.ownerId, ownerId),
+    eq(marketplaceConnectionsTable.companyId, companyIdFromRequest(req)),
     eq(marketplaceConnectionsTable.marketplace, AI_CONNECTION_ID),
   )).limit(1);
   if (!row) {
@@ -227,7 +235,7 @@ router.post("/marketplace/ai-models", async (req, res): Promise<void> => {
   }
   if (!apiKey) {
     const [row] = await db.select().from(marketplaceConnectionsTable).where(and(
-      eq(marketplaceConnectionsTable.ownerId, ownerId),
+      eq(marketplaceConnectionsTable.companyId, companyIdFromRequest(req)),
       eq(marketplaceConnectionsTable.marketplace, AI_CONNECTION_ID),
     )).limit(1);
     if (row) apiKey = decryptCredentials<AiAssistantCredentials>(row.credentialsCiphertext).apiKey;
@@ -253,7 +261,7 @@ router.put("/marketplace/ai-config", async (req, res): Promise<void> => {
     return;
   }
   const [existing] = await db.select().from(marketplaceConnectionsTable).where(and(
-    eq(marketplaceConnectionsTable.ownerId, ownerId),
+    eq(marketplaceConnectionsTable.companyId, companyIdFromRequest(req)),
     eq(marketplaceConnectionsTable.marketplace, AI_CONNECTION_ID),
   )).limit(1);
   if (!apiKey && existing) apiKey = decryptCredentials<AiAssistantCredentials>(existing.credentialsCiphertext).apiKey;
@@ -264,13 +272,14 @@ router.put("/marketplace/ai-config", async (req, res): Promise<void> => {
   const ciphertext = encryptCredentials({ baseUrl, apiKey, model });
   await db.insert(marketplaceConnectionsTable).values({
     ownerId,
+    companyId: companyIdFromRequest(req),
     marketplace: AI_CONNECTION_ID,
     storeName: "ИИ-помощник",
     credentialsCiphertext: ciphertext,
     lastSyncAt: new Date(),
   }).onConflictDoUpdate({
-    target: [marketplaceConnectionsTable.ownerId, marketplaceConnectionsTable.marketplace],
-    set: { storeName: "ИИ-помощник", credentialsCiphertext: ciphertext, lastSyncAt: new Date(), updatedAt: new Date() },
+    target: [marketplaceConnectionsTable.companyId, marketplaceConnectionsTable.marketplace, marketplaceConnectionsTable.storeName],
+    set: { credentialsCiphertext: ciphertext, lastSyncAt: new Date(), updatedAt: new Date() },
   });
   res.json({ configured: true, baseUrl, model, apiKeyConfigured: true });
 });
@@ -278,16 +287,33 @@ router.put("/marketplace/ai-config", async (req, res): Promise<void> => {
 router.delete("/marketplace/ai-config", async (req, res): Promise<void> => {
   const ownerId = userIdFromRequest(req);
   await db.delete(marketplaceConnectionsTable).where(and(
-    eq(marketplaceConnectionsTable.ownerId, ownerId),
+    eq(marketplaceConnectionsTable.companyId, companyIdFromRequest(req)),
     eq(marketplaceConnectionsTable.marketplace, AI_CONNECTION_ID),
   ));
   res.status(204).end();
 });
 
+router.get("/marketplace/ai-chat", async (req, res): Promise<void> => {
+  const [conversation] = await db.select().from(aiConversationsTable).where(eq(aiConversationsTable.companyId, companyIdFromRequest(req)))
+    .orderBy(desc(aiConversationsTable.updatedAt)).limit(1);
+  if (!conversation) { res.json({ conversationId: null, messages: [] }); return; }
+  const messages = await db.select().from(aiMessagesTable).where(eq(aiMessagesTable.conversationId, conversation.id))
+    .orderBy(aiMessagesTable.createdAt).limit(100);
+  res.json({ conversationId: conversation.id, title: conversation.title, messages });
+});
+
+router.post("/marketplace/ai-chat/new", async (req, res): Promise<void> => {
+  const [conversation] = await db.insert(aiConversationsTable).values({
+    companyId: companyIdFromRequest(req), createdBy: userIdFromRequest(req),
+    context: typeof req.body?.context === "string" ? req.body.context.slice(0, 20_000) : "{}",
+  }).returning({ id: aiConversationsTable.id });
+  res.status(201).json({ conversationId: conversation.id });
+});
+
 router.post("/marketplace/ai-chat", async (req, res): Promise<void> => {
   const ownerId = userIdFromRequest(req);
   const [row] = await db.select().from(marketplaceConnectionsTable).where(and(
-    eq(marketplaceConnectionsTable.ownerId, ownerId),
+    eq(marketplaceConnectionsTable.companyId, companyIdFromRequest(req)),
     eq(marketplaceConnectionsTable.marketplace, AI_CONNECTION_ID),
   )).limit(1);
   if (!row) {
@@ -313,7 +339,32 @@ router.post("/marketplace/ai-chat", async (req, res): Promise<void> => {
   }
   const credentials = decryptCredentials<AiAssistantCredentials>(row.credentialsCiphertext);
   try {
-    res.json({ answer: await requestAiCompletion(credentials, messages, rawContext) });
+    const answer = await requestAiCompletion(credentials, messages, rawContext);
+    const requestedConversationId = typeof req.body?.conversationId === "string" ? req.body.conversationId : "";
+    let conversationId = "";
+    if (requestedConversationId && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(requestedConversationId)) {
+      const [existing] = await db.select({ id: aiConversationsTable.id }).from(aiConversationsTable).where(and(
+        eq(aiConversationsTable.id, requestedConversationId), eq(aiConversationsTable.companyId, companyIdFromRequest(req)),
+      )).limit(1);
+      conversationId = existing?.id ?? "";
+    }
+    const lastQuestion = messages[messages.length - 1]!.content;
+    if (!conversationId) {
+      const [conversation] = await db.insert(aiConversationsTable).values({
+        companyId: companyIdFromRequest(req), createdBy: userIdFromRequest(req),
+        title: lastQuestion.slice(0, 120), context: rawContext,
+      }).returning({ id: aiConversationsTable.id });
+      conversationId = conversation.id;
+    } else {
+      await db.update(aiConversationsTable).set({ context: rawContext, updatedAt: new Date() }).where(and(
+        eq(aiConversationsTable.id, conversationId), eq(aiConversationsTable.companyId, companyIdFromRequest(req)),
+      ));
+    }
+    await db.insert(aiMessagesTable).values([
+      { conversationId, role: "user", content: lastQuestion },
+      { conversationId, role: "assistant", content: answer },
+    ]);
+    res.json({ answer, conversationId });
   } catch (error) {
     req.log.warn({ providerHost: new URL(credentials.baseUrl).host, err: error }, "AI provider request failed");
     res.status(502).json({ error: error instanceof Error ? error.message : "Не удалось получить ответ ИИ." });
@@ -326,11 +377,27 @@ function userIdFromRequest(req: Express.Request): string {
   return userId;
 }
 
+function companyIdFromRequest(req: Express.Request): string {
+  if (!req.companyId) throw new Error("Active company is missing");
+  return req.companyId;
+}
+
+function storeIdFromRequest(req: import("express").Request): number | null {
+  const value = typeof req.query.storeId === "string" ? Number(req.query.storeId) : NaN;
+  return Number.isInteger(value) && value > 0 ? value : null;
+}
+
+function allowedStoreIds(req: import("express").Request): string[] | "all" {
+  const value = req.companyPermissions?.storeAccess;
+  return value === "all" || !Array.isArray(value) ? "all" : value;
+}
+
 function connectionView(
   marketplace: Marketplace,
   row?: typeof marketplaceConnectionsTable.$inferSelect,
 ) {
   return {
+    id: row?.id ?? null,
     marketplace,
     connected: Boolean(row),
     storeName: row?.storeName ?? null,
@@ -339,22 +406,26 @@ function connectionView(
   };
 }
 
-async function findConnection(ownerId: string, marketplace: Marketplace) {
-  const [row] = await db
+async function findConnections(ownerId: string, marketplace: Marketplace, storeId?: number | null, allowed: string[] | "all" = "all") {
+  if (storeId && Array.isArray(allowed) && !allowed.includes(String(storeId))) return undefined;
+  if (!storeId && Array.isArray(allowed) && !allowed.length) return undefined;
+  return db
     .select()
     .from(marketplaceConnectionsTable)
     .where(
       and(
-        eq(marketplaceConnectionsTable.ownerId, ownerId),
+        eq(marketplaceConnectionsTable.companyId, ownerId),
         eq(marketplaceConnectionsTable.marketplace, marketplace),
+        ...(storeId ? [eq(marketplaceConnectionsTable.id, storeId)] : []),
+        ...(!storeId && Array.isArray(allowed) ? [inArray(marketplaceConnectionsTable.id, allowed.map(Number))] : []),
       ),
     )
-    .limit(1);
-  return row;
+    .orderBy(asc(marketplaceConnectionsTable.id));
 }
 
 async function saveConnection(
   ownerId: string,
+  companyId: string,
   marketplace: Marketplace,
   storeName: string,
   credentials: ConnectionCredentials,
@@ -364,6 +435,7 @@ async function saveConnection(
     .insert(marketplaceConnectionsTable)
     .values({
       ownerId,
+      companyId,
       marketplace,
       storeName,
       credentialsCiphertext: encrypted,
@@ -371,8 +443,9 @@ async function saveConnection(
     })
     .onConflictDoUpdate({
       target: [
-        marketplaceConnectionsTable.ownerId,
+        marketplaceConnectionsTable.companyId,
         marketplaceConnectionsTable.marketplace,
+        marketplaceConnectionsTable.storeName,
       ],
       set: {
         storeName,
@@ -417,16 +490,46 @@ function datesInRange(from: string, to: string): string[] {
 
 router.get("/marketplace/connections", async (req, res): Promise<void> => {
   const ownerId = userIdFromRequest(req);
+  const selected = storeIdFromRequest(req);
+  const allowed = allowedStoreIds(req);
+  if (selected && Array.isArray(allowed) && !allowed.includes(String(selected))) { res.status(403).json({ error: "У вашей роли нет доступа к этому магазину." }); return; }
   const rows = await db
     .select()
     .from(marketplaceConnectionsTable)
-    .where(eq(marketplaceConnectionsTable.ownerId, ownerId));
-  const byMarketplace = new Map(rows.map((row) => [row.marketplace, row]));
+    .where(and(eq(marketplaceConnectionsTable.companyId, companyIdFromRequest(req)),
+      ...(selected ? [eq(marketplaceConnectionsTable.id, selected)] : []),
+      ...(!selected && Array.isArray(allowed) ? [inArray(marketplaceConnectionsTable.id, allowed.map(Number))] : []),
+    )).orderBy(asc(marketplaceConnectionsTable.id));
+  const byMarketplace = new Map<string, typeof rows[number]>();
+  for (const row of rows) if (!byMarketplace.has(row.marketplace)) byMarketplace.set(row.marketplace, row);
   const response = ListMarketplaceConnectionsResponse.parse([
     connectionView("ozon", byMarketplace.get("ozon")),
     connectionView("wildberries", byMarketplace.get("wildberries")),
   ]);
   res.json(response);
+});
+
+router.get("/marketplace/stores", async (req, res): Promise<void> => {
+  const rows = await db.select({ id: marketplaceConnectionsTable.id, marketplace: marketplaceConnectionsTable.marketplace, storeName: marketplaceConnectionsTable.storeName, lastSyncAt: marketplaceConnectionsTable.lastSyncAt })
+    .from(marketplaceConnectionsTable).where(and(
+      eq(marketplaceConnectionsTable.companyId, companyIdFromRequest(req)),
+      inArray(marketplaceConnectionsTable.marketplace, ["ozon", "wildberries"]),
+    )).orderBy(marketplaceConnectionsTable.marketplace, marketplaceConnectionsTable.storeName);
+  const allowed = allowedStoreIds(req);
+  res.json({ stores: rows.filter((row) => allowed === "all" || allowed.includes(String(row.id))).map((row) => ({ ...row, lastSyncAt: row.lastSyncAt?.toISOString() ?? null })) });
+});
+
+router.delete("/marketplace/stores/:id", async (req, res): Promise<void> => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id) || id <= 0) { res.status(400).json({ error: "Некорректный магазин." }); return; }
+  const allowed = allowedStoreIds(req);
+  if (Array.isArray(allowed) && !allowed.includes(String(id))) { res.status(404).json({ error: "Магазин не найден." }); return; }
+  const [removed] = await db.delete(marketplaceConnectionsTable).where(and(
+    eq(marketplaceConnectionsTable.id, id), eq(marketplaceConnectionsTable.companyId, companyIdFromRequest(req)),
+    inArray(marketplaceConnectionsTable.marketplace, ["ozon", "wildberries"]),
+  )).returning({ id: marketplaceConnectionsTable.id });
+  if (!removed) { res.status(404).json({ error: "Магазин не найден." }); return; }
+  res.sendStatus(204);
 });
 
 router.post("/marketplace/connections/ozon", async (req, res): Promise<void> => {
@@ -447,10 +550,12 @@ router.post("/marketplace/connections/ozon", async (req, res): Promise<void> => 
     return;
   }
 
+  const storeName = typeof req.body?.storeName === "string" ? req.body.storeName.trim().slice(0, 120) : "";
   const row = await saveConnection(
     ownerId,
+    companyIdFromRequest(req),
     "ozon",
-    "Магазин Ozon",
+    storeName || "Магазин Ozon",
     parsed.data,
   );
   req.log.info({ marketplace: "ozon" }, "Marketplace connected");
@@ -478,10 +583,12 @@ router.post(
       return;
     }
 
+    const storeName = typeof req.body?.storeName === "string" ? req.body.storeName.trim().slice(0, 120) : "";
     const row = await saveConnection(
       ownerId,
+      companyIdFromRequest(req),
       "wildberries",
-      "Магазин Wildberries",
+      storeName || "Магазин Wildberries",
       parsed.data,
     );
     req.log.info({ marketplace: "wildberries" }, "Marketplace connected");
@@ -506,7 +613,7 @@ router.delete(
       .delete(marketplaceConnectionsTable)
       .where(
         and(
-          eq(marketplaceConnectionsTable.ownerId, ownerId),
+          eq(marketplaceConnectionsTable.companyId, companyIdFromRequest(req)),
           eq(marketplaceConnectionsTable.marketplace, parsed.data.marketplace),
         ),
       );
@@ -524,11 +631,21 @@ router.get("/marketplace/dashboard", async (req, res): Promise<void> => {
   const ownerId = userIdFromRequest(req);
   const { period, marketplace } = query.data;
   const { from, to } = periodDates(period);
+  const requestedStoreId = storeIdFromRequest(req);
+  if (req.query.storeId !== undefined && !requestedStoreId) { res.status(400).json({ error: "Выбран некорректный магазин." }); return; }
+  const allowedStores = allowedStoreIds(req);
+  if (requestedStoreId && Array.isArray(allowedStores) && !allowedStores.includes(String(requestedStoreId))) { res.status(403).json({ error: "У вашей роли нет доступа к этому магазину." }); return; }
   const connectedRows = await db
     .select()
     .from(marketplaceConnectionsTable)
-    .where(eq(marketplaceConnectionsTable.ownerId, ownerId));
-  const rows = new Map(connectedRows.map((row) => [row.marketplace, row]));
+    .where(and(eq(marketplaceConnectionsTable.companyId, companyIdFromRequest(req)),
+      ...(requestedStoreId ? [eq(marketplaceConnectionsTable.id, requestedStoreId)] : []),
+      ...(!requestedStoreId && Array.isArray(allowedStores) ? [inArray(marketplaceConnectionsTable.id, allowedStores.map(Number))] : []),
+    )).orderBy(asc(marketplaceConnectionsTable.id));
+  const rows = new Map<Marketplace, Array<typeof connectedRows[number]>>();
+  for (const row of connectedRows) {
+    if (row.marketplace === "ozon" || row.marketplace === "wildberries") rows.set(row.marketplace, [...(rows.get(row.marketplace) ?? []), row]);
+  }
   const snapshots = new Map<Marketplace, MarketplaceSnapshot>();
   const partialErrors: string[] = [];
 
@@ -539,79 +656,54 @@ router.get("/marketplace/dashboard", async (req, res): Promise<void> => {
 
   await Promise.all(
     targets.map(async (target) => {
-      const connection = rows.get(target);
-      if (!connection) return;
-
-  try {
-        const cooldownKey = `${ownerId}:${target}:${connection.id}`;
-        const cooldownUntil = marketplaceCooldowns.get(cooldownKey) ?? 0;
-        if (cooldownUntil > Date.now()) {
-          const remainingSeconds = Math.ceil((cooldownUntil - Date.now()) / 1000);
-          const wait = remainingSeconds >= 3600
-            ? `${Math.ceil(remainingSeconds / 3600)} ч.`
-            : remainingSeconds >= 60
-              ? `${Math.ceil(remainingSeconds / 60)} мин.`
-              : `${remainingSeconds} сек.`;
-          partialErrors.push(`Wildberries: API временно ограничил запросы. Повторите через ${wait}.`);
-          snapshots.set(target, zeroSnapshot());
-          return;
+      const connections = rows.get(target) ?? [];
+      if (!connections.length) return;
+      const combined = zeroSnapshot();
+      for (const connection of connections) {
+        try {
+          const cooldownKey = `${companyIdFromRequest(req)}:${target}:${connection.id}`;
+          const cooldownUntil = Math.max(
+            marketplaceCooldowns.get(cooldownKey) ?? 0,
+            connection.analyticsRetryAt?.getTime() ?? 0,
+          );
+          if (cooldownUntil > Date.now()) {
+            const remainingSeconds = Math.ceil((cooldownUntil - Date.now()) / 1000);
+            const wait = remainingSeconds >= 3600 ? `${Math.ceil(remainingSeconds / 3600)} ч.` : remainingSeconds >= 60 ? `${Math.ceil(remainingSeconds / 60)} мин.` : `${remainingSeconds} сек.`;
+            partialErrors.push(`${connection.storeName}: API временно ограничил запросы. Повторите через ${wait}.`);
+            continue;
+          }
+          const cacheKey = [companyIdFromRequest(req), target, connection.id, connection.updatedAt.getTime(), from, to].join(":");
+          const credentials = decryptCredentials<Record<string, string>>(connection.credentialsCiphertext);
+          const snapshot = await getCachedSnapshot(cacheKey, () => target === "ozon"
+            ? getOzonSnapshot(credentials as { clientId: string; apiKey: string }, from, to)
+            : getWildberriesSnapshot(credentials as { apiKey: string }, from, to));
+          for (const [date, point] of snapshot.daily) {
+            const previous = combined.daily.get(date) ?? { ...point, date, revenue: 0, orders: 0, units: 0, views: 0, cartAdds: 0 };
+            combined.daily.set(date, {
+              date, revenue: previous.revenue + point.revenue, orders: previous.orders + point.orders,
+              units: previous.units + point.units, views: previous.views + point.views, cartAdds: previous.cartAdds + point.cartAdds,
+            });
+          }
+          combined.funnel.views += snapshot.funnel.views; combined.funnel.cartAdds += snapshot.funnel.cartAdds;
+          combined.funnel.orders += snapshot.funnel.orders; combined.funnel.units += snapshot.funnel.units;
+          await db.update(marketplaceConnectionsTable).set({ lastSyncAt: new Date(), analyticsRetryAt: null }).where(eq(marketplaceConnectionsTable.id, connection.id));
+        } catch (error) {
+          if (target === "wildberries" && error instanceof MarketplaceRateLimitError) {
+            const retryAt = new Date(Date.now() + error.retryAfterSeconds * 1000);
+            marketplaceCooldowns.set(`${companyIdFromRequest(req)}:${target}:${connection.id}`, retryAt.getTime());
+            await db.update(marketplaceConnectionsTable).set({ analyticsRetryAt: retryAt }).where(and(
+              eq(marketplaceConnectionsTable.id, connection.id),
+              eq(marketplaceConnectionsTable.companyId, companyIdFromRequest(req)),
+            ));
+            const wait = error.retryAfterSeconds >= 3600 ? `${Math.ceil(error.retryAfterSeconds / 3600)} ч.` : error.retryAfterSeconds >= 60 ? `${Math.ceil(error.retryAfterSeconds / 60)} мин.` : `${error.retryAfterSeconds} сек.`;
+            partialErrors.push(`${connection.storeName}: API временно ограничил запросы (429). Подключение активно; повторите через ${wait}.`);
+          } else {
+            req.log.warn({ marketplace: target, storeId: connection.id }, "Marketplace data request failed");
+            partialErrors.push(`${connection.storeName}: ${errorMessage(error)}`);
+          }
         }
-        const cacheKey = [
-          ownerId,
-          target,
-          connection.id,
-          connection.updatedAt.getTime(),
-          from,
-          to,
-        ].join(":");
-
-        if (target === "ozon") {
-          const credentials =
-            decryptCredentials<{ clientId: string; apiKey: string }>(
-              connection.credentialsCiphertext,
-            );
-          snapshots.set(
-            target,
-            await getCachedSnapshot(
-              cacheKey,
-              () => getOzonSnapshot(credentials, from, to),
-            ),
-          );
-        } else {
-          const credentials = decryptCredentials<{ apiKey: string }>(
-            connection.credentialsCiphertext,
-          );
-          snapshots.set(
-            target,
-            await getCachedSnapshot(
-              cacheKey,
-              () => getWildberriesSnapshot(credentials, from, to),
-            ),
-          );
-        }
-        await db
-          .update(marketplaceConnectionsTable)
-          .set({ lastSyncAt: new Date() })
-          .where(eq(marketplaceConnectionsTable.id, connection.id));
-      } catch (error) {
-        if (target === "wildberries" && error instanceof MarketplaceRateLimitError) {
-          marketplaceCooldowns.set(
-            `${ownerId}:${target}:${connection.id}`,
-            Date.now() + error.retryAfterSeconds * 1000,
-          );
-          const wait = error.retryAfterSeconds >= 3600
-            ? `${Math.ceil(error.retryAfterSeconds / 3600)} ч.`
-            : error.retryAfterSeconds >= 60
-              ? `${Math.ceil(error.retryAfterSeconds / 60)} мин.`
-              : `${error.retryAfterSeconds} сек.`;
-          partialErrors.push(`Wildberries: API временно ограничил запросы (429). Подключение активно; повторите через ${wait}.`);
-          snapshots.set(target, zeroSnapshot());
-          return;
-        }
-        req.log.warn({ marketplace: target }, "Marketplace data request failed");
-        partialErrors.push(`${target === "ozon" ? "Ozon" : "Wildberries"}: ${errorMessage(error)}`);
-        snapshots.set(target, zeroSnapshot());
       }
+      snapshots.set(target, combined);
     }),
   );
 
@@ -702,26 +794,33 @@ router.get("/marketplace/finance/wildberries", async (req, res): Promise<void> =
     return;
   }
 
-  const connection = await findConnection(ownerId, "wildberries");
-  if (!connection) {
+  const connections = await findConnections(companyIdFromRequest(req), "wildberries", storeIdFromRequest(req), allowedStoreIds(req));
+  if (!connections?.length) {
     res.status(404).json({ error: "Сначала подключите Wildberries в настройках API." });
     return;
   }
 
   try {
-    const credentials = decryptCredentials<{ apiKey: string }>(
-      connection.credentialsCiphertext,
-    );
-    const report = await getCachedFinance(
-      `${ownerId}:wildberries:${connection.id}:${connection.updatedAt.getTime()}:${from}:${to}`,
-      () => getWildberriesFinanceReport(credentials.apiKey, from, to),
-    ) as Awaited<ReturnType<typeof getWildberriesFinanceReport>>;
+    const reports: Array<Awaited<ReturnType<typeof getWildberriesFinanceReport>>> = [];
+    for (const connection of connections) {
+      const credentials = decryptCredentials<{ apiKey: string }>(connection.credentialsCiphertext);
+      reports.push(await getCachedFinance(
+        `${companyIdFromRequest(req)}:wildberries:${connection.id}:${connection.updatedAt.getTime()}:${from}:${to}`,
+        () => getWildberriesFinanceReport(credentials.apiKey, from, to),
+      ));
+    }
+    const totalKeys = Object.keys(reports[0]!.totals) as Array<keyof typeof reports[number]["totals"]>;
+    const report = {
+      ...reports[0]!, rowsCount: reports.reduce((sum, item) => sum + item.rowsCount, 0),
+      incomplete: reports.some((item) => item.incomplete), soldItems: reports.flatMap((item) => item.soldItems),
+      totals: Object.fromEntries(totalKeys.map((key) => [key, reports.reduce((sum, item) => sum + item.totals[key], 0)])) as typeof reports[number]["totals"],
+    };
     const [catalogProducts, marketplaceProducts] = await Promise.all([
       db.select({ id: cogsProductsTable.id, sellerSku: cogsProductsTable.sellerSku, marketplace: cogsProductsTable.marketplace, unitCost: cogsProductsTable.unitCost })
-        .from(cogsProductsTable).where(eq(cogsProductsTable.ownerId, ownerId)),
+        .from(cogsProductsTable).where(eq(cogsProductsTable.companyId, companyIdFromRequest(req))),
       db.select({ productId: cogsProductMarketplacesTable.productId, marketplaceSku: cogsProductMarketplacesTable.marketplaceSku, externalProductId: cogsProductMarketplacesTable.externalProductId })
         .from(cogsProductMarketplacesTable).where(and(
-          eq(cogsProductMarketplacesTable.ownerId, ownerId),
+          eq(cogsProductMarketplacesTable.companyId, companyIdFromRequest(req)),
           eq(cogsProductMarketplacesTable.marketplace, "wildberries"),
         )),
     ]);
@@ -755,15 +854,9 @@ router.get("/marketplace/finance/wildberries", async (req, res): Promise<void> =
       unmatchedUnits,
       costOfGoods: Math.round(costOfGoods * 100) / 100,
     };
-    await db
-      .update(marketplaceConnectionsTable)
-      .set({ lastSyncAt: new Date() })
-      .where(
-        and(
-          eq(marketplaceConnectionsTable.id, connection.id),
-          eq(marketplaceConnectionsTable.ownerId, ownerId),
-        ),
-      );
+    await Promise.all(connections.map((connection) => db.update(marketplaceConnectionsTable).set({ lastSyncAt: new Date() }).where(and(
+      eq(marketplaceConnectionsTable.id, connection.id), eq(marketplaceConnectionsTable.companyId, companyIdFromRequest(req)),
+    ))));
     req.log.info({ marketplace: "wildberries", rows: report.rowsCount }, "Finance report loaded");
     res.json(report);
   } catch (error) {
@@ -797,29 +890,53 @@ router.get("/marketplace/finance/ozon", async (req, res): Promise<void> => {
     return;
   }
 
-  const connection = await findConnection(ownerId, "ozon");
-  if (!connection) {
+  const connections = await findConnections(companyIdFromRequest(req), "ozon", storeIdFromRequest(req), allowedStoreIds(req));
+  if (!connections?.length) {
     res.status(404).json({ error: "Сначала подключите Ozon в настройках API." });
     return;
   }
 
   try {
-    const credentials = decryptCredentials<{ clientId: string; apiKey: string }>(
-      connection.credentialsCiphertext,
-    );
-    const report = await getCachedFinance(
-      `${ownerId}:ozon:${connection.id}:${connection.updatedAt.getTime()}:${from}:${to}`,
-      () => getOzonFinanceReport(credentials, from, to),
-    ) as Awaited<ReturnType<typeof getOzonFinanceReport>>;
-    await db
-      .update(marketplaceConnectionsTable)
-      .set({ lastSyncAt: new Date() })
-      .where(
-        and(
-          eq(marketplaceConnectionsTable.id, connection.id),
-          eq(marketplaceConnectionsTable.ownerId, ownerId),
-        ),
-      );
+    const reports: Array<Awaited<ReturnType<typeof getOzonFinanceReport>>> = [];
+    for (const connection of connections) {
+      const credentials = decryptCredentials<{ clientId: string; apiKey: string }>(connection.credentialsCiphertext);
+      reports.push(await getCachedFinance(
+        `${companyIdFromRequest(req)}:ozon:${connection.id}:${connection.updatedAt.getTime()}:${from}:${to}`,
+        () => getOzonFinanceReport(credentials, from, to),
+      ));
+    }
+    const totalKeys = Object.keys(reports[0]!.totals) as Array<keyof typeof reports[number]["totals"]>;
+    const report: typeof reports[number] & { catalogCost: { matchedUnits: number; unmatchedUnits: number; costOfGoods: number } } = {
+      ...reports[0]!, soldItems: reports.flatMap((item) => item.soldItems), productSalesError: reports.find((item) => item.productSalesError)?.productSalesError ?? null, productSalesMetric: reports.some((item) => item.productSalesMetric === "ordered_units") ? "ordered_units" : null, totals: Object.fromEntries(totalKeys.map((key) => [key, reports.reduce((sum, item) => sum + item.totals[key], 0)])) as typeof reports[number]["totals"],
+      catalogCost: { matchedUnits: 0, unmatchedUnits: 0, costOfGoods: 0 },
+    };
+    const [catalogProducts, marketplaceProducts] = await Promise.all([
+      db.select({ id: cogsProductsTable.id, sellerSku: cogsProductsTable.sellerSku, marketplace: cogsProductsTable.marketplace, unitCost: cogsProductsTable.unitCost }).from(cogsProductsTable).where(eq(cogsProductsTable.companyId, companyIdFromRequest(req))),
+      db.select({ productId: cogsProductMarketplacesTable.productId, marketplaceSku: cogsProductMarketplacesTable.marketplaceSku, externalProductId: cogsProductMarketplacesTable.externalProductId }).from(cogsProductMarketplacesTable).where(and(eq(cogsProductMarketplacesTable.companyId, companyIdFromRequest(req)), eq(cogsProductMarketplacesTable.marketplace, "ozon"))),
+    ]);
+    const productsById = new Map(catalogProducts.map((product) => [product.id, product]));
+    const bySellerSku = new Map<string, typeof catalogProducts[number]>();
+    const byExternalId = new Map<string, typeof catalogProducts[number]>();
+    for (const link of marketplaceProducts) {
+      const product = productsById.get(link.productId);
+      if (!product) continue;
+      if (link.marketplaceSku) bySellerSku.set(link.marketplaceSku.trim().toLocaleLowerCase("ru-RU"), product);
+      if (link.externalProductId) byExternalId.set(link.externalProductId.trim(), product);
+    }
+    for (const product of catalogProducts) if (product.marketplace === "both" || product.marketplace === "ozon") {
+      const sku = product.sellerSku.trim().toLocaleLowerCase("ru-RU");
+      if (sku && !bySellerSku.has(sku)) bySellerSku.set(sku, product);
+    }
+    let matchedUnits = 0; let unmatchedUnits = 0; let costOfGoods = 0;
+    for (const item of report.soldItems) {
+      const product = bySellerSku.get(item.sellerSku.trim().toLocaleLowerCase("ru-RU")) ?? byExternalId.get(item.externalProductId);
+      if (!product) unmatchedUnits += item.quantity;
+      else { matchedUnits += item.quantity; costOfGoods += Number(product.unitCost) * item.quantity; }
+    }
+    report.catalogCost = { matchedUnits, unmatchedUnits, costOfGoods: Math.round(costOfGoods * 100) / 100 };
+    await Promise.all(connections.map((connection) => db.update(marketplaceConnectionsTable).set({ lastSyncAt: new Date() }).where(and(
+      eq(marketplaceConnectionsTable.id, connection.id), eq(marketplaceConnectionsTable.companyId, companyIdFromRequest(req)),
+    ))));
     req.log.info({ marketplace: "ozon", accruals: report.totals.accrualsCount }, "Finance report loaded");
     res.json(report);
   } catch (error) {
@@ -835,7 +952,7 @@ router.get("/marketplace/finance/expenses", async (req, res): Promise<void> => {
   const validDate = (value: string) => /^\d{4}-\d{2}-\d{2}$/.test(value) && !Number.isNaN(Date.parse(`${value}T00:00:00.000Z`));
   if (!validDate(from) || !validDate(to) || from > to) { res.status(400).json({ error: "Укажите корректный период расходов." }); return; }
   const expenses = await db.select().from(sellerExpensesTable).where(and(
-    eq(sellerExpensesTable.ownerId, ownerId),
+    eq(sellerExpensesTable.companyId, companyIdFromRequest(req)),
     gte(sellerExpensesTable.expenseDate, from),
     lte(sellerExpensesTable.expenseDate, to),
   )).orderBy(desc(sellerExpensesTable.expenseDate), desc(sellerExpensesTable.createdAt));
@@ -858,7 +975,7 @@ router.post("/marketplace/finance/expenses", async (req, res): Promise<void> => 
     res.status(400).json({ error: "Сумма расхода должна быть больше нуля." }); return;
   }
   const [expense] = await db.insert(sellerExpensesTable).values({
-    ownerId, expenseDate, category, description, amount,
+    ownerId, companyId: companyIdFromRequest(req), expenseDate, category, description, amount,
   }).returning();
   res.status(201).json(expense);
 });
@@ -870,7 +987,7 @@ router.delete("/marketplace/finance/expenses/:id", async (req, res): Promise<voi
     res.status(400).json({ error: "Некорректный расход." }); return;
   }
   const deleted = await db.delete(sellerExpensesTable).where(and(
-    eq(sellerExpensesTable.ownerId, ownerId), eq(sellerExpensesTable.id, id),
+    eq(sellerExpensesTable.companyId, companyIdFromRequest(req)), eq(sellerExpensesTable.id, id),
   )).returning({ id: sellerExpensesTable.id });
   if (!deleted.length) { res.status(404).json({ error: "Расход не найден." }); return; }
   res.status(204).end();

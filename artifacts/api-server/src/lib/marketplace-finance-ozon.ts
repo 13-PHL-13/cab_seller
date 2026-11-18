@@ -17,6 +17,9 @@ export type OzonFinanceResult = {
   from: string;
   to: string;
   totals: OzonFinanceTotals;
+  soldItems: Array<{ sellerSku: string; externalProductId: string; quantity: number }>;
+  productSalesError: string | null;
+  productSalesMetric: "ordered_units" | null;
 };
 
 function asRecord(value: unknown): RecordValue {
@@ -38,6 +41,50 @@ function amount(value: unknown): number | null {
 
 function round(value: number): number {
   return Math.round(value * 100) / 100;
+}
+
+function extractSoldItems(rows: unknown[]) {
+  const byIdentity = new Map<string, { sellerSku: string; externalProductId: string; quantity: number }>();
+  for (const raw of rows) {
+    const accrual = asRecord(raw);
+    const posting = asRecord(accrual.posting);
+    const products = asArray(accrual.products ?? accrual.items ?? accrual.product);
+    for (const rawProduct of products) {
+      const product = asRecord(rawProduct);
+      const sellerSku = String(product.offer_id ?? product.offerId ?? product.seller_sku ?? product.sellerSku ?? "").trim();
+      const externalProductId = String(product.sku ?? product.product_id ?? product.productId ?? "").trim();
+      const quantity = Math.abs(amount(product.quantity ?? product.qty) ?? 0);
+      if ((!sellerSku && !externalProductId) || quantity <= 0) continue;
+      const postingNumber = String(posting.posting_number ?? posting.postingNumber ?? accrual.posting_number ?? "");
+      const identity = `${postingNumber}\u0000${sellerSku.toLocaleLowerCase("ru-RU")}\u0000${externalProductId}`;
+      const previous = byIdentity.get(identity);
+      if (previous) previous.quantity = Math.max(previous.quantity, quantity);
+      else byIdentity.set(identity, { sellerSku, externalProductId, quantity });
+    }
+  }
+  return [...byIdentity.values()];
+}
+
+async function getOzonOrderedBySku(credentials: { clientId: string; apiKey: string }, from: string, to: string) {
+  const response = await fetch("https://api-seller.ozon.ru/v1/analytics/data", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "Client-Id": credentials.clientId, "Api-Key": credentials.apiKey },
+    body: JSON.stringify({ date_from: from, date_to: to, dimension: ["sku"], metrics: ["ordered_units"], filters: [], limit: 1000, offset: 0 }),
+    signal: AbortSignal.timeout(30_000),
+  });
+  if (!response.ok) throw new Error(`Ozon Analytics API вернул HTTP ${response.status} для отчёта по SKU.`);
+  const payload = asRecord(await response.json());
+  const rows = asArray(asRecord(payload.result).data);
+  const quantities = new Map<string, number>();
+  for (const raw of rows) {
+    const row = asRecord(raw);
+    const dimensions = asArray(row.dimensions);
+    const sku = String(asRecord(dimensions[0]).id ?? "").trim();
+    const metrics = asArray(row.metrics);
+    const quantity = Math.max(0, amount(metrics[0]) ?? 0);
+    if (sku && quantity > 0) quantities.set(sku, (quantities.get(sku) ?? 0) + quantity);
+  }
+  return [...quantities].map(([sku, quantity]) => ({ sellerSku: "", externalProductId: sku, quantity }));
 }
 
 export function aggregateOzonAccruals(rows: unknown[]): OzonFinanceTotals {
@@ -170,11 +217,22 @@ export async function getOzonFinanceReport(
     .map((row) => asRecord(asRecord(row)["total_amount"])["currency"])
     .find((value): value is string => typeof value === "string") ?? null;
 
+  let soldItems = extractSoldItems(rows);
+  let productSalesError: string | null = null;
+  let productSalesMetric: "ordered_units" | null = null;
+  if (!soldItems.length) {
+    try { soldItems = await getOzonOrderedBySku(credentials, from, to); productSalesMetric = "ordered_units"; }
+    catch (error) { productSalesError = error instanceof Error ? error.message : "Не удалось получить заказы Ozon по SKU."; }
+  }
+
   return {
     marketplace: "ozon",
     currency,
     from,
     to,
     totals: aggregateOzonAccruals(rows),
+    soldItems,
+    productSalesError,
+    productSalesMetric,
   };
 }
