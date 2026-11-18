@@ -6,6 +6,12 @@ function required(name: string): string {
   return value;
 }
 
+function appOrigin(): string {
+  const origin = process.env.APP_ORIGIN ?? process.env.RENDER_EXTERNAL_URL;
+  if (!origin) throw new Error("APP_ORIGIN or RENDER_EXTERNAL_URL is required to send account emails");
+  return origin.replace(/\/$/, "");
+}
+
 async function sendMail(email: string, subjectText: string, paragraphs: string[]): Promise<void> {
   const host = required("SMTP_HOST");
   const port = Number(process.env.SMTP_PORT ?? 465);
@@ -71,16 +77,16 @@ async function sendMail(email: string, subjectText: string, paragraphs: string[]
 }
 
 export async function sendVerificationEmail(email: string, token: string): Promise<void> {
-  const origin = required("APP_ORIGIN").replace(/\/$/, "");
+  const origin = appOrigin();
   const link = `${origin}/verify-email?token=${encodeURIComponent(token)}`;
   await sendMail(email, "Подтверждение регистрации — Навигатор продаж", [
-    "Здравствуйте!", "Чтобы подтвердить адрес электронной почты, откройте ссылку:", link,
-    "", "Ссылка действует 30 минут.", "Если вы не регистрировались, проигнорируйте это письмо.",
+    "Здравствуйте!", "Чтобы подтвердить адрес электронной почты, откройте ссылку:",
+    link, "", "Ссылка действует 30 минут.", "Если вы не регистрировались, проигнорируйте это письмо.",
   ]);
 }
 
 export async function sendPasswordResetEmail(email: string, token: string): Promise<void> {
-  const origin = required("APP_ORIGIN").replace(/\/$/, "");
+  const origin = appOrigin();
   const link = `${origin}/reset-password?token=${encodeURIComponent(token)}`;
   await sendMail(email, "Сброс пароля — Навигатор продаж", [
     "Здравствуйте!", "Чтобы задать новый пароль, откройте ссылку:", link,
@@ -89,11 +95,11 @@ export async function sendPasswordResetEmail(email: string, token: string): Prom
 }
 
 export async function sendCompanyInvitationEmail(email: string, token: string, companyName: string): Promise<void> {
-  const origin = required("APP_ORIGIN").replace(/\/$/, "");
+  const origin = appOrigin();
   const link = `${origin}/invitations/accept?token=${encodeURIComponent(token)}`;
   await sendMail(email, `Приглашение в компанию ${companyName} — Навигатор продаж`, [
     "Здравствуйте!", `Вас пригласили в компанию «${companyName}» в Навигаторе продаж.`,
-    "Войдите или зарегистрируйтесь с этим адресом электронной почты, затем откройте ссылку:", link,
-    "", "Ссылка действует 7 дней. Если вы не ожидали приглашение, проигнорируйте это письмо.",
+    "Войдите или зарегистрируйтесь с этим адресом электронной почты, затем откройте ссылку:",
+    link, "", "Ссылка действует 7 дней. Если вы не ожидали приглашение, проигнорируйте это письмо.",
   ]);
 }
