@@ -12,7 +12,46 @@ function appOrigin(): string {
   return origin.replace(/\/$/, "");
 }
 
+function senderAddress(): string {
+  const configured = process.env.BREVO_SENDER_EMAIL ?? required("SMTP_FROM");
+  const match = configured.match(/<([^<>]+)>/);
+  return (match?.[1] ?? configured).trim();
+}
+
+async function sendViaBrevo(email: string, subject: string, paragraphs: string[]): Promise<void> {
+  const apiKey = required("BREVO_API_KEY");
+  const response = await fetch("https://api.brevo.com/v3/smtp/email", {
+    method: "POST",
+    headers: {
+      "accept": "application/json",
+      "api-key": apiKey,
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({
+      sender: {
+        name: process.env.BREVO_SENDER_NAME ?? "Навигатор продаж",
+        email: senderAddress(),
+      },
+      to: [{ email }],
+      subject,
+      textContent: paragraphs.join("\n"),
+    }),
+    signal: AbortSignal.timeout(15_000),
+  });
+
+  if (!response.ok) {
+    const details = (await response.text()).slice(0, 500);
+    throw new Error(`Brevo email API returned HTTP ${response.status}: ${details}`);
+  }
+}
+
 async function sendMail(email: string, subjectText: string, paragraphs: string[]): Promise<void> {
+  // Render's free web services block outbound SMTP. Prefer Brevo's HTTPS API there.
+  if (process.env.BREVO_API_KEY) {
+    await sendViaBrevo(email, subjectText, paragraphs);
+    return;
+  }
+
   const host = required("SMTP_HOST");
   const port = Number(process.env.SMTP_PORT ?? 465);
   if (port !== 465) throw new Error("SMTP transport requires implicit TLS on port 465.");
