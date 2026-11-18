@@ -25,6 +25,11 @@ CREATE TABLE IF NOT EXISTS company_memberships (
   CONSTRAINT company_memberships_company_user_unique UNIQUE (company_id, user_id)
 );
 
+-- CREATE TABLE IF NOT EXISTS doesn't add constraints to a table that already
+-- exists, so ensure the conflict target exists when upgrading older databases.
+CREATE UNIQUE INDEX IF NOT EXISTS company_memberships_company_user_unique
+  ON company_memberships(company_id, user_id);
+
 CREATE TABLE IF NOT EXISTS company_invitations (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   company_id uuid NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
