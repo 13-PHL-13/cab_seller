@@ -257,7 +257,7 @@ export default function SettingsPage() {
               <div className="conn-fields">
                   <div className="field">
                     <label>Название магазина</label>
-                    <input className="input" placeholder={`Магазин ${p.name}`} value={storeNames[p.id === 'ozon' ? 'ozon' : 'wb']} onChange={(e) => setStoreNames((current) => ({ ...current, [p.id === 'ozon' ? 'ozon' : 'wb']: e.target.value }))} maxLength={120} />
+                    <input className="input" name={`marketplace-${p.id}-store-name`} autoComplete="organization" placeholder={`Магазин ${p.name}`} value={storeNames[p.id === 'ozon' ? 'ozon' : 'wb']} onChange={(e) => setStoreNames((current) => ({ ...current, [p.id === 'ozon' ? 'ozon' : 'wb']: e.target.value }))} maxLength={120} />
                   </div>
                   {p.fields.filter((f) => p.id === 'ozon' || f.key !== 'clientId').map((f) => (
                     <div className="field" key={f.key}>
@@ -267,6 +267,8 @@ export default function SettingsPage() {
                           className="input"
                           style={{ paddingRight: 38 }}
                           type={showSecret[`${p.id}-${f.key}`] ? 'text' : 'password'}
+                          name={`marketplace-${p.id}-${f.key}`}
+                          autoComplete="new-password"
                           placeholder={f.placeholder}
                           value={conn.credentials[f.key] ?? ''}
                           onChange={(e) => setCredential(p.id, f.key, e.target.value)}
