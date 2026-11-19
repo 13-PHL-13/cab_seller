@@ -21,8 +21,8 @@ export function dashboardStoreData(
   const ozon = platform === "ozon";
   return {
     totals: {
-      views: snapshot.funnel.views,
-      carts: snapshot.funnel.cartAdds,
+      views: snapshot.funnel.views as number | null,
+      carts: snapshot.funnel.cartAdds as number | null,
       orders: ozon ? snapshot.funnel.orders : null,
       bought: ozon ? null : snapshot.funnel.units,
       orderAmount: ozon
