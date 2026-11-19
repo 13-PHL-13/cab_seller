@@ -6,7 +6,7 @@ import { requireCompanySection } from '../middlewares/requireCompanyAccess';
 import { taskTransition, validateDeadline, type TaskAction } from '../lib/task-policy';
 const router: IRouter = Router();
 router.use('/tasks', requireUser, requireCompanySection('tasks'));
-const uuid = (id: unknown): id is string => typeof id === 'string' && /^[0-9a-f]{8}-[0-9a-f-]{27}$/i.test(id);
+const uuid = (id: unknown): id is string => typeof id === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(id);
 const canIssue = (req: import('express').Request) => req.companyRole === 'owner' || req.companyRole === 'admin' || Boolean(req.companyPermissions?.canIssueTasks);
 const involved = (task: {createdBy:string;assigneeUserId:string|null;delegators:string[]}, id:string) => task.createdBy === id || task.assigneeUserId === id || task.delegators.includes(id);
 router.get('/tasks', async(req,res,next)=>{
