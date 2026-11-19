@@ -1,0 +1,717 @@
+{
+  "wb": {
+    "name": "Wildberries",
+    "intro": "Для одного магазина создайте один токен со всеми доступными категориями и правами «Чтение и запись».",
+    "url": "https://seller.wildberries.ru/api-integrations",
+    "help": "https://seller.wildberries.ru/instructions/ru/ru/material/how-to-create-update-or-delete-a-wb-api-token",
+    "steps": [
+      {
+        "title": "Откройте профиль магазина",
+        "text": "На главной странице WB Partners откройте меню профиля. Показатели и товары в учебных материалах скрыты.",
+        "time": 0,
+        "sourceTime": 0,
+        "shot": 0,
+        "image": "wb-home-v5",
+        "target": null,
+        "reveal": false
+      },
+      {
+        "title": "Откройте «Интеграции по API»",
+        "text": "В меню профиля нажмите «Интеграции по API».",
+        "time": 0.8,
+        "sourceTime": 0.8,
+        "shot": 0.8,
+        "image": "wb-menu-v5",
+        "target": [
+          2020,
+          418,
+          2350,
+          465
+        ],
+        "reveal": false
+      },
+      {
+        "title": "Начните создание токена",
+        "text": "Нажмите «Создать токен» на странице интеграций. Уже созданные токены для этой инструкции не нужны.",
+        "time": 2.8,
+        "sourceTime": 2.8,
+        "shot": 3.2,
+        "image": "wb-start-v5",
+        "target": [
+          35,
+          369,
+          201,
+          419
+        ],
+        "reveal": false
+      },
+      {
+        "title": "Выберите ручную интеграцию и базовый токен",
+        "text": "Выберите «Для интеграции вручную», затем «Базовый токен».",
+        "time": 6.7,
+        "sourceTime": 5.7,
+        "shot": 6.7,
+        "image": "wb-type-v5",
+        "target": [
+          1463,
+          151,
+          1760,
+          215
+        ],
+        "reveal": false
+      },
+      {
+        "title": "Введите название токена",
+        "text": "В поле «Придумайте название токена» введите «Навигатор продаж».",
+        "time": 11,
+        "sourceTime": 8,
+        "shot": 12,
+        "image": "wb-name-v5",
+        "target": [
+          1464,
+          343,
+          2387,
+          386
+        ],
+        "reveal": false
+      },
+      {
+        "title": "Отметьте все доступные категории",
+        "text": "Отметьте все доступные категории данных. Серые недоступные категории выбирать не нужно.",
+        "time": 16,
+        "sourceTime": 13,
+        "shot": 23.4,
+        "image": "wb-categories-v5",
+        "target": [
+          1462,
+          448,
+          2387,
+          611
+        ],
+        "reveal": false
+      },
+      {
+        "title": "Выберите «Чтение и запись»",
+        "text": "В разделе «Уровень доступа к данным» выберите «Чтение и запись».",
+        "time": 23,
+        "sourceTime": 20,
+        "shot": 20.6,
+        "image": "wb-access-v5",
+        "target": [
+          1460,
+          659,
+          1927,
+          730
+        ],
+        "reveal": false
+      },
+      {
+        "title": "Создайте токен",
+        "text": "Нажмите «Создать токен» внизу формы.",
+        "time": 28.0,
+        "sourceTime": 23.5,
+        "shot": 24.5,
+        "image": "wb-create-v5",
+        "target": [
+          1460,
+          1104,
+          1598,
+          1151
+        ],
+        "reveal": true
+      },
+      {
+        "title": "Скопируйте токен и вставьте в форму магазина",
+        "text": "В окне «Токен создан» нажмите «Скопировать и завершить». Вернитесь в форму добавления магазина Wildberries и вставьте скопированное значение в поле «API-токен».",
+        "time": 31.3,
+        "sourceTime": 25.3,
+        "shot": 31,
+        "image": "wb-copy-v5",
+        "target": [
+          739,
+          727,
+          965,
+          780
+        ],
+        "reveal": true
+      }
+    ],
+    "parts": [
+      {
+        "id": "wb",
+        "title": "Подключите Wildberries",
+        "description": "От главной страницы до сохранения токена.",
+        "credentials": [
+          "API-токен"
+        ],
+        "media": "wb-api-v5",
+        "durationSeconds": 42.45,
+        "steps": [
+          {
+            "title": "Откройте профиль магазина",
+            "text": "На главной странице WB Partners откройте меню профиля. Показатели и товары в учебных материалах скрыты.",
+            "time": 0,
+            "sourceTime": 0,
+            "shot": 0,
+            "image": "wb-home-v5",
+            "target": null,
+            "reveal": false
+          },
+          {
+            "title": "Откройте «Интеграции по API»",
+            "text": "В меню профиля нажмите «Интеграции по API».",
+            "time": 0.8,
+            "sourceTime": 0.8,
+            "shot": 0.8,
+            "image": "wb-menu-v5",
+            "target": [
+              2020,
+              418,
+              2350,
+              465
+            ],
+            "reveal": false
+          },
+          {
+            "title": "Начните создание токена",
+            "text": "Нажмите «Создать токен» на странице интеграций. Уже созданные токены для этой инструкции не нужны.",
+            "time": 2.8,
+            "sourceTime": 2.8,
+            "shot": 3.2,
+            "image": "wb-start-v5",
+            "target": [
+              35,
+              369,
+              201,
+              419
+            ],
+            "reveal": false
+          },
+          {
+            "title": "Выберите ручную интеграцию и базовый токен",
+            "text": "Выберите «Для интеграции вручную», затем «Базовый токен».",
+            "time": 6.7,
+            "sourceTime": 5.7,
+            "shot": 6.7,
+            "image": "wb-type-v5",
+            "target": [
+              1463,
+              151,
+              1760,
+              215
+            ],
+            "reveal": false
+          },
+          {
+            "title": "Введите название токена",
+            "text": "В поле «Придумайте название токена» введите «Навигатор продаж».",
+            "time": 11,
+            "sourceTime": 8,
+            "shot": 12,
+            "image": "wb-name-v5",
+            "target": [
+              1464,
+              343,
+              2387,
+              386
+            ],
+            "reveal": false
+          },
+          {
+            "title": "Отметьте все доступные категории",
+            "text": "Отметьте все доступные категории данных. Серые недоступные категории выбирать не нужно.",
+            "time": 16,
+            "sourceTime": 13,
+            "shot": 23.4,
+            "image": "wb-categories-v5",
+            "target": [
+              1462,
+              448,
+              2387,
+              611
+            ],
+            "reveal": false
+          },
+          {
+            "title": "Выберите «Чтение и запись»",
+            "text": "В разделе «Уровень доступа к данным» выберите «Чтение и запись».",
+            "time": 23,
+            "sourceTime": 20,
+            "shot": 20.6,
+            "image": "wb-access-v5",
+            "target": [
+              1460,
+              659,
+              1927,
+              730
+            ],
+            "reveal": false
+          },
+          {
+            "title": "Создайте токен",
+            "text": "Нажмите «Создать токен» внизу формы.",
+            "time": 28.0,
+            "sourceTime": 23.5,
+            "shot": 24.5,
+            "image": "wb-create-v5",
+            "target": [
+              1460,
+              1104,
+              1598,
+              1151
+            ],
+            "reveal": true
+          },
+          {
+            "title": "Скопируйте токен и вставьте в форму магазина",
+            "text": "В окне «Токен создан» нажмите «Скопировать и завершить». Вернитесь в форму добавления магазина Wildberries и вставьте скопированное значение в поле «API-токен».",
+            "time": 31.3,
+            "sourceTime": 25.3,
+            "shot": 31,
+            "image": "wb-copy-v5",
+            "target": [
+              739,
+              727,
+              965,
+              780
+            ],
+            "reveal": true
+          }
+        ]
+      }
+    ]
+  },
+  "ozon": {
+    "name": "Ozon",
+    "intro": "Для одного магазина Ozon нужны оба доступа: Seller API и Performance API. У каждого — свой Client ID.",
+    "url": "https://seller.ozon.ru/app/settings/api-keys",
+    "help": "https://docs.ozon.ru/api/seller/",
+    "steps": [
+      {
+        "title": "Откройте профиль магазина",
+        "text": "На главной странице Ozon Seller выберите нужный магазин и откройте профиль в правом верхнем углу.",
+        "time": 0,
+        "sourceTime": 0,
+        "shot": 0,
+        "image": "ozon-home-v5",
+        "target": [
+          1900,
+          4,
+          1970,
+          64
+        ],
+        "reveal": false
+      },
+      {
+        "title": "Нажмите «Настройки»",
+        "text": "В открывшемся меню профиля нажмите «Настройки». Личные данные в верхней части меню скрыты.",
+        "time": 4.1,
+        "sourceTime": 4.1,
+        "shot": 4.4,
+        "image": "ozon-settings-menu-v5",
+        "target": [
+          1842,
+          198,
+          2190,
+          270
+        ],
+        "reveal": false
+      },
+      {
+        "title": "Откройте «API интеграции»",
+        "text": "В меню настроек слева нажмите «API интеграции». На скриншоте пункт выделен красной рамкой.",
+        "time": 6.5,
+        "sourceTime": 5,
+        "shot": 5.8,
+        "image": "ozon-api-menu-v5",
+        "target": null,
+        "reveal": false
+      },
+      {
+        "title": "Выберите Seller API и скопируйте Client ID",
+        "text": "Откройте Seller API и нажмите значок копирования возле Client ID. Это идентификатор для первого блока подключения магазина.",
+        "time": 10.3,
+        "sourceTime": 7.8,
+        "shot": 9.2,
+        "image": "ozon-client-v5",
+        "target": [
+          1090,
+          640,
+          1135,
+          690
+        ],
+        "reveal": false
+      },
+      {
+        "title": "Начните создание API Key",
+        "text": "Нажмите «Сгенерировать ключ», введите название «Навигатор продаж» и выберите цель использования ключа.",
+        "time": 14.3,
+        "sourceTime": 10.8,
+        "shot": 18,
+        "image": "ozon-name-v5",
+        "target": [
+          750,
+          340,
+          1550,
+          405
+        ],
+        "reveal": false
+      },
+      {
+        "title": "Обязательно выберите Admin",
+        "text": "Прокрутите список типов токена вниз и отметьте Admin с полным доступом. Не выбирайте Admin read only. Нажмите «Сгенерировать».",
+        "time": 25.5,
+        "sourceTime": 22,
+        "shot": 24,
+        "image": "ozon-admin-v5",
+        "target": [
+          750,
+          1634,
+          1515,
+          1730
+        ],
+        "reveal": false
+      },
+      {
+        "title": "Скопируйте API Key кнопкой возле поля",
+        "text": "В окне «Ключ доступа создан» нажмите значок копирования возле ключа. В форме магазина вставьте это значение в поле API Key блока Seller API, а идентификатор магазина — в Client ID того же блока.",
+        "time": 32.0,
+        "sourceTime": 26.5,
+        "shot": 27.5,
+        "image": "ozon-seller-copy-v5",
+        "target": [
+          1500,
+          308,
+          1550,
+          358
+        ],
+        "reveal": false
+      },
+      {
+        "title": "Продолжите: откройте Performance API",
+        "text": "В меню «API интеграции» выберите Performance API. Этот доступ обязателен для функций работы с рекламой.",
+        "time": 38.5,
+        "sourceTime": 31.5,
+        "shot": 33,
+        "image": "ozon-performance-v5",
+        "target": [
+          309,
+          851,
+          665,
+          913
+        ],
+        "reveal": false
+      },
+      {
+        "title": "Откройте сервисный аккаунт по номеру",
+        "text": "Нажмите номер нужного сервисного аккаунта. В учебном видео номер заменён на 100001, остальные аккаунты скрыты. Если аккаунта ещё нет, сначала нажмите «Создать аккаунт».",
+        "time": 47.0,
+        "sourceTime": 39,
+        "shot": 41,
+        "image": "ozon-account-v5",
+        "target": [
+          706,
+          441,
+          888,
+          496
+        ],
+        "reveal": false
+      },
+      {
+        "title": "Нажмите «Добавить ключ»",
+        "text": "В открывшемся окне сервисного аккаунта нажмите «Добавить ключ».",
+        "time": 50.1,
+        "sourceTime": 42.1,
+        "shot": 42.7,
+        "image": "ozon-add-key-v5",
+        "target": [
+          492,
+          136,
+          701,
+          190
+        ],
+        "reveal": false
+      },
+      {
+        "title": "Введите название ключа",
+        "text": "В поле названия введите «Навигатор продаж».",
+        "time": 54.5,
+        "sourceTime": 45,
+        "shot": 48.2,
+        "image": "ozon-key-name-v5",
+        "target": [
+          720,
+          107,
+          1590,
+          170
+        ],
+        "reveal": false
+      },
+      {
+        "title": "Нажмите «Добавить»",
+        "text": "Подтвердите создание ключа кнопкой «Добавить».",
+        "time": 58.1,
+        "sourceTime": 48.6,
+        "shot": 49,
+        "image": "ozon-confirm-v5",
+        "target": [
+          718,
+          222,
+          866,
+          286
+        ],
+        "reveal": false
+      },
+      {
+        "title": "Скопируйте Client ID из Performance API",
+        "text": "Нажмите значок копирования рядом с идентификатором клиента. Вставьте его в Client ID блока Performance API в форме подключения магазина.",
+        "time": 59.5,
+        "sourceTime": 50,
+        "shot": 51.3,
+        "image": "ozon-performance-client-v5",
+        "target": [
+          1048,
+          278,
+          1095,
+          325
+        ],
+        "reveal": true
+      },
+      {
+        "title": "Скопируйте Client Secret из Performance API",
+        "text": "Нажмите значок копирования рядом с секретом клиента. Вставьте значение в Client Secret блока Performance API. Client ID от Seller API сюда не подходит.",
+        "time": 64.0,
+        "sourceTime": 52.5,
+        "shot": 54,
+        "image": "ozon-performance-secret-v5",
+        "target": [
+          1268,
+          278,
+          1315,
+          325
+        ],
+        "reveal": true
+      }
+    ],
+    "parts": [
+      {
+        "id": "ozon",
+        "title": "Подключите Ozon: Seller + Performance API",
+        "description": "Одна последовательность с главного экрана. Выполните все шаги до конца.",
+        "credentials": [
+          "Seller: Client ID + API Key",
+          "Performance: Client ID + Client Secret"
+        ],
+        "media": "ozon-api-v5",
+        "durationSeconds": 71.1,
+        "steps": [
+          {
+            "title": "Откройте профиль магазина",
+            "text": "На главной странице Ozon Seller выберите нужный магазин и откройте профиль в правом верхнем углу.",
+            "time": 0,
+            "sourceTime": 0,
+            "shot": 0,
+            "image": "ozon-home-v5",
+            "target": [
+              1900,
+              4,
+              1970,
+              64
+            ],
+            "reveal": false
+          },
+          {
+            "title": "Нажмите «Настройки»",
+            "text": "В открывшемся меню профиля нажмите «Настройки». Личные данные в верхней части меню скрыты.",
+            "time": 4.1,
+            "sourceTime": 4.1,
+            "shot": 4.4,
+            "image": "ozon-settings-menu-v5",
+            "target": [
+              1842,
+              198,
+              2190,
+              270
+            ],
+            "reveal": false
+          },
+          {
+            "title": "Откройте «API интеграции»",
+            "text": "В меню настроек слева нажмите «API интеграции». На скриншоте пункт выделен красной рамкой.",
+            "time": 6.5,
+            "sourceTime": 5,
+            "shot": 5.8,
+            "image": "ozon-api-menu-v5",
+            "target": null,
+            "reveal": false
+          },
+          {
+            "title": "Выберите Seller API и скопируйте Client ID",
+            "text": "Откройте Seller API и нажмите значок копирования возле Client ID. Это идентификатор для первого блока подключения магазина.",
+            "time": 10.3,
+            "sourceTime": 7.8,
+            "shot": 9.2,
+            "image": "ozon-client-v5",
+            "target": [
+              1090,
+              640,
+              1135,
+              690
+            ],
+            "reveal": false
+          },
+          {
+            "title": "Начните создание API Key",
+            "text": "Нажмите «Сгенерировать ключ», введите название «Навигатор продаж» и выберите цель использования ключа.",
+            "time": 14.3,
+            "sourceTime": 10.8,
+            "shot": 18,
+            "image": "ozon-name-v5",
+            "target": [
+              750,
+              340,
+              1550,
+              405
+            ],
+            "reveal": false
+          },
+          {
+            "title": "Обязательно выберите Admin",
+            "text": "Прокрутите список типов токена вниз и отметьте Admin с полным доступом. Не выбирайте Admin read only. Нажмите «Сгенерировать».",
+            "time": 25.5,
+            "sourceTime": 22,
+            "shot": 24,
+            "image": "ozon-admin-v5",
+            "target": [
+              750,
+              1634,
+              1515,
+              1730
+            ],
+            "reveal": false
+          },
+          {
+            "title": "Скопируйте API Key кнопкой возле поля",
+            "text": "В окне «Ключ доступа создан» нажмите значок копирования возле ключа. В форме магазина вставьте это значение в поле API Key блока Seller API, а идентификатор магазина — в Client ID того же блока.",
+            "time": 32.0,
+            "sourceTime": 26.5,
+            "shot": 27.5,
+            "image": "ozon-seller-copy-v5",
+            "target": [
+              1500,
+              308,
+              1550,
+              358
+            ],
+            "reveal": false
+          },
+          {
+            "title": "Продолжите: откройте Performance API",
+            "text": "В меню «API интеграции» выберите Performance API. Этот доступ обязателен для функций работы с рекламой.",
+            "time": 38.5,
+            "sourceTime": 31.5,
+            "shot": 33,
+            "image": "ozon-performance-v5",
+            "target": [
+              309,
+              851,
+              665,
+              913
+            ],
+            "reveal": false
+          },
+          {
+            "title": "Откройте сервисный аккаунт по номеру",
+            "text": "Нажмите номер нужного сервисного аккаунта. В учебном видео номер заменён на 100001, остальные аккаунты скрыты. Если аккаунта ещё нет, сначала нажмите «Создать аккаунт».",
+            "time": 47.0,
+            "sourceTime": 39,
+            "shot": 41,
+            "image": "ozon-account-v5",
+            "target": [
+              706,
+              441,
+              888,
+              496
+            ],
+            "reveal": false
+          },
+          {
+            "title": "Нажмите «Добавить ключ»",
+            "text": "В открывшемся окне сервисного аккаунта нажмите «Добавить ключ».",
+            "time": 50.1,
+            "sourceTime": 42.1,
+            "shot": 42.7,
+            "image": "ozon-add-key-v5",
+            "target": [
+              492,
+              136,
+              701,
+              190
+            ],
+            "reveal": false
+          },
+          {
+            "title": "Введите название ключа",
+            "text": "В поле названия введите «Навигатор продаж».",
+            "time": 54.5,
+            "sourceTime": 45,
+            "shot": 48.2,
+            "image": "ozon-key-name-v5",
+            "target": [
+              720,
+              107,
+              1590,
+              170
+            ],
+            "reveal": false
+          },
+          {
+            "title": "Нажмите «Добавить»",
+            "text": "Подтвердите создание ключа кнопкой «Добавить».",
+            "time": 58.1,
+            "sourceTime": 48.6,
+            "shot": 49,
+            "image": "ozon-confirm-v5",
+            "target": [
+              718,
+              222,
+              866,
+              286
+            ],
+            "reveal": false
+          },
+          {
+            "title": "Скопируйте Client ID из Performance API",
+            "text": "Нажмите значок копирования рядом с идентификатором клиента. Вставьте его в Client ID блока Performance API в форме подключения магазина.",
+            "time": 59.5,
+            "sourceTime": 50,
+            "shot": 51.3,
+            "image": "ozon-performance-client-v5",
+            "target": [
+              1048,
+              278,
+              1095,
+              325
+            ],
+            "reveal": true
+          },
+          {
+            "title": "Скопируйте Client Secret из Performance API",
+            "text": "Нажмите значок копирования рядом с секретом клиента. Вставьте значение в Client Secret блока Performance API. Client ID от Seller API сюда не подходит.",
+            "time": 64.0,
+            "sourceTime": 52.5,
+            "shot": 54,
+            "image": "ozon-performance-secret-v5",
+            "target": [
+              1268,
+              278,
+              1315,
+              325
+            ],
+            "reveal": true
+          }
+        ]
+      }
+    ]
+  }
+}

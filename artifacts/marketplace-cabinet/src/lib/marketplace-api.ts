@@ -9,7 +9,7 @@ export interface MarketplaceConnection {
   lastSyncAt: string | null;
   statusMessage: string | null;
 }
-export interface MarketplaceStore { id: number; marketplace: MarketplaceId; storeName: string; lastSyncAt: string | null }
+export interface MarketplaceStore { id: number; marketplace: MarketplaceId; storeName: string; lastSyncAt: string | null; performanceConnected?: boolean }
 
 export interface AiAssistantConfig {
   configured: boolean;
@@ -139,7 +139,7 @@ export function deleteMarketplaceStore(id: number): Promise<void> {
 
 export function connectMarketplace(
   marketplace: MarketplaceId,
-  credentials: { clientId: string; apiKey: string; storeName?: string } | { apiKey: string; storeName?: string },
+  credentials: { clientId: string; apiKey: string; storeName?: string; performance?: { clientId: string; clientSecret: string } } | { apiKey: string; storeName?: string },
 ): Promise<MarketplaceConnection> {
   return apiRequest(`/api/marketplace/connections/${marketplace === "ozon" ? "ozon" : "wildberries"}`, {
     method: "POST",
@@ -250,4 +250,8 @@ export function createSellerExpense(input: { expenseDate: string; category: stri
 
 export function deleteSellerExpense(id: string): Promise<void> {
   return apiRequest(`/api/marketplace/finance/expenses/${id}`, { method: "DELETE" });
+}
+
+export function updateOzonPerformance(storeId: number, credentials: { clientId: string; clientSecret: string }): Promise<{ connected: boolean }> {
+  return apiRequest(`/api/marketplace/stores/${storeId}/ozon-performance`, { method: "PUT", body: JSON.stringify(credentials) });
 }

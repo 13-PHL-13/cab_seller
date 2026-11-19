@@ -30,9 +30,11 @@ import {
   type MarketplaceSnapshot,
 } from "../lib/marketplace-data";
 
+import { parsePerformanceCredentials, verifyPerformanceCredentials, performanceConfigured, type OzonStoreCredentials } from "../lib/ozon-performance";
+
 type Marketplace = "ozon" | "wildberries";
 type ConnectionCredentials =
-  | { clientId: string; apiKey: string }
+  | OzonStoreCredentials
   | { apiKey: string }
   | { baseUrl: string; apiKey: string; model: string };
 
@@ -429,9 +431,10 @@ async function saveConnection(
   marketplace: Marketplace,
   storeName: string,
   credentials: ConnectionCredentials,
+  createOnly = false,
 ) {
   const encrypted = encryptCredentials(credentials);
-  const [row] = await db
+  const insert = db
     .insert(marketplaceConnectionsTable)
     .values({
       ownerId,
@@ -440,8 +443,8 @@ async function saveConnection(
       storeName,
       credentialsCiphertext: encrypted,
       lastSyncAt: new Date(),
-    })
-    .onConflictDoUpdate({
+    });
+  const [row] = await (createOnly ? insert.onConflictDoNothing() : insert.onConflictDoUpdate({
       target: [
         marketplaceConnectionsTable.companyId,
         marketplaceConnectionsTable.marketplace,
@@ -453,7 +456,7 @@ async function saveConnection(
         lastSyncAt: new Date(),
         updatedAt: new Date(),
       },
-    })
+    }))
     .returning();
   return row;
 }
@@ -510,13 +513,43 @@ router.get("/marketplace/connections", async (req, res): Promise<void> => {
 });
 
 router.get("/marketplace/stores", async (req, res): Promise<void> => {
-  const rows = await db.select({ id: marketplaceConnectionsTable.id, marketplace: marketplaceConnectionsTable.marketplace, storeName: marketplaceConnectionsTable.storeName, lastSyncAt: marketplaceConnectionsTable.lastSyncAt })
+  const rows = await db.select({ id: marketplaceConnectionsTable.id, marketplace: marketplaceConnectionsTable.marketplace, storeName: marketplaceConnectionsTable.storeName, lastSyncAt: marketplaceConnectionsTable.lastSyncAt, credentialsCiphertext: marketplaceConnectionsTable.credentialsCiphertext })
     .from(marketplaceConnectionsTable).where(and(
       eq(marketplaceConnectionsTable.companyId, companyIdFromRequest(req)),
       inArray(marketplaceConnectionsTable.marketplace, ["ozon", "wildberries"]),
     )).orderBy(marketplaceConnectionsTable.marketplace, marketplaceConnectionsTable.storeName);
   const allowed = allowedStoreIds(req);
-  res.json({ stores: rows.filter((row) => allowed === "all" || allowed.includes(String(row.id))).map((row) => ({ ...row, lastSyncAt: row.lastSyncAt?.toISOString() ?? null })) });
+  res.json({ stores: rows.filter((row) => allowed === "all" || allowed.includes(String(row.id))).map((row) => ({ id: row.id, marketplace: row.marketplace, storeName: row.storeName, lastSyncAt: row.lastSyncAt?.toISOString() ?? null, performanceConnected: row.marketplace === "ozon" && performanceConfigured(decryptCredentials<OzonStoreCredentials>(row.credentialsCiphertext)) })) });
+});
+
+router.put("/marketplace/stores/:id/ozon-performance", async (req, res): Promise<void> => {
+  const id = Number(req.params.id), allowed = allowedStoreIds(req);
+  if (!Number.isSafeInteger(id) || id <= 0) { res.status(400).json({ error: "Некорректный магазин." }); return; }
+  if (Array.isArray(allowed) && !allowed.includes(String(id))) { res.status(404).json({ error: "Магазин не найден." }); return; }
+  const performance = parsePerformanceCredentials(req.body);
+  if (!performance) { res.status(400).json({ error: "Укажите Client ID и Client Secret от Performance API." }); return; }
+  const [row] = await db.select().from(marketplaceConnectionsTable).where(and(
+    eq(marketplaceConnectionsTable.id, id), eq(marketplaceConnectionsTable.companyId, companyIdFromRequest(req)),
+    eq(marketplaceConnectionsTable.marketplace, "ozon"),
+  )).limit(1);
+  if (!row) { res.status(404).json({ error: "Магазин не найден." }); return; }
+  try { await verifyPerformanceCredentials(performance); }
+  catch (error) { res.status(400).json({ error: errorMessage(error) }); return; }
+  // Lock and reread: concurrent Seller API updates must not be overwritten.
+  const saved = await db.transaction(async (tx) => {
+    const [current] = await tx.select().from(marketplaceConnectionsTable).where(and(
+      eq(marketplaceConnectionsTable.id, id), eq(marketplaceConnectionsTable.companyId, companyIdFromRequest(req)),
+      eq(marketplaceConnectionsTable.marketplace, "ozon"),
+    )).for("update").limit(1);
+    if (!current) return false;
+    const credentials = decryptCredentials<OzonStoreCredentials>(current.credentialsCiphertext);
+    await tx.update(marketplaceConnectionsTable).set({
+      credentialsCiphertext: encryptCredentials({ ...credentials, performance }), updatedAt: new Date(),
+    }).where(and(eq(marketplaceConnectionsTable.id, id), eq(marketplaceConnectionsTable.companyId, companyIdFromRequest(req))));
+    return true;
+  });
+  if (!saved) { res.status(404).json({ error: "Магазин не найден." }); return; }
+  res.json({ connected: true });
 });
 
 router.delete("/marketplace/stores/:id", async (req, res): Promise<void> => {
@@ -536,16 +569,20 @@ router.post("/marketplace/connections/ozon", async (req, res): Promise<void> => 
   const ownerId = userIdFromRequest(req);
   const parsed = ConnectOzonBody.safeParse(req.body);
   if (!parsed.success) {
-    res.status(400).json({ error: "Укажите Client ID и API-ключ Ozon." });
+    res.status(400).json({ error: "Укажите ключи обоих блоков Ozon: Seller API и Performance API." });
     return;
   }
+  const performance = parsePerformanceCredentials(parsed.data.performance);
+  if (!performance) { res.status(400).json({ error: "Укажите отдельные Client ID и Client Secret от Performance API." }); return; }
+  parsed.data.performance = performance;
 
   try {
     await verifyOzonCredentials(parsed.data);
+    await verifyPerformanceCredentials(parsed.data.performance);
   } catch (error) {
     req.log.warn({ marketplace: "ozon" }, "Marketplace credential verification failed");
     res.status(400).json({
-      error: errorMessage(error),
+      error: "Не удалось проверить доступ Ozon. Проверьте ключи Seller API и Performance API и повторите подключение позже.",
     });
     return;
   }
@@ -557,7 +594,9 @@ router.post("/marketplace/connections/ozon", async (req, res): Promise<void> => 
     "ozon",
     storeName || "Магазин Ozon",
     parsed.data,
+    true,
   );
+  if (!row) { res.status(409).json({ error: "Магазин с таким названием уже добавлен. Performance API можно добавить в его карточке." }); return; }
   req.log.info({ marketplace: "ozon" }, "Marketplace connected");
   res.json(ConnectOzonResponse.parse(connectionView("ozon", row)));
 });

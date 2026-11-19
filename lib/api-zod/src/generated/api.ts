@@ -70,15 +70,23 @@ export const ListMarketplaceConnectionsResponse = zod.array(ListMarketplaceConne
 
 
 /**
- * @summary Verify and save Ozon Seller API credentials
+ * @summary Verify and save both Ozon Seller and Performance API credentials
  */
 
+
+export const connectOzonBodyPerformanceClientIdMax = 2000;
+
+export const connectOzonBodyPerformanceClientSecretMax = 4000;
 
 
 
 export const ConnectOzonBody = zod.object({
   "clientId": zod.string().min(1),
-  "apiKey": zod.string().min(1)
+  "apiKey": zod.string().min(1),
+  "performance": zod.object({
+  "clientId": zod.string().min(1).max(connectOzonBodyPerformanceClientIdMax),
+  "clientSecret": zod.string().min(1).max(connectOzonBodyPerformanceClientSecretMax)
+})
 })
 
 export const ConnectOzonResponse = zod.object({
@@ -106,6 +114,32 @@ export const ConnectWildberriesResponse = zod.object({
   "storeName": zod.string().nullable(),
   "lastSyncAt": zod.string().nullable(),
   "statusMessage": zod.string().nullable()
+})
+
+
+/**
+ * @summary Add or replace Performance API credentials for an existing Ozon store
+ */
+
+
+
+export const UpdateOzonStorePerformanceParams = zod.object({
+  "id": zod.coerce.number().int().min(1)
+})
+
+export const updateOzonStorePerformanceBodyClientIdMax = 2000;
+
+export const updateOzonStorePerformanceBodyClientSecretMax = 4000;
+
+
+
+export const UpdateOzonStorePerformanceBody = zod.object({
+  "clientId": zod.string().min(1).max(updateOzonStorePerformanceBodyClientIdMax),
+  "clientSecret": zod.string().min(1).max(updateOzonStorePerformanceBodyClientSecretMax)
+})
+
+export const UpdateOzonStorePerformanceResponse = zod.object({
+  "connected": zod.boolean()
 })
 
 

@@ -1,11 +1,9 @@
 import { useEffect, useState } from 'react';
-import { ExternalLink, Eye, EyeOff, Info, KeyRound, RefreshCw, ShieldCheck, User, Bell, X, Check, Bot, Search, Download } from 'lucide-react';
-import { API_PLATFORMS, loadSettings, saveSettings } from '@/data/settings';
+import { Eye, EyeOff, Info, KeyRound, User, Bell, X, Bot, Search, Download } from 'lucide-react';
+import { loadSettings, saveSettings } from '@/data/settings';
 import type { AppSettings } from '@/data/settings';
-import { timeAgo } from '@/lib/format';
-import { connectMarketplace, disconnectMarketplace, deleteMarketplaceStore, getMarketplaceConnections, getMarketplaceStores, getMarketplaceDashboard, formatApiError, getAiAssistantConfig, fetchAiModels, saveAiAssistantConfig, disconnectAiAssistant } from '@/lib/marketplace-api';
-import type { MarketplaceId } from '@/lib/marketplace-api';
-import type { MarketplaceStore } from '@/lib/marketplace-api';
+import ApiConnections from '@/components/ApiConnections';
+import { formatApiError, getAiAssistantConfig, fetchAiModels, saveAiAssistantConfig, disconnectAiAssistant } from '@/lib/marketplace-api';
 
 type Tab = 'api' | 'ai' | 'profile' | 'notifications';
 
@@ -21,11 +19,6 @@ const AI_PROVIDERS = [
 export default function SettingsPage() {
   const [tab, setTab] = useState<Tab>('api');
   const [settings, setSettings] = useState<AppSettings>(() => loadSettings());
-  const [showSecret, setShowSecret] = useState<Record<string, boolean>>({});
-  const [busy, setBusy] = useState<string | null>(null);
-  const [connectionErrors, setConnectionErrors] = useState<Record<string, string>>({});
-  const [stores, setStores] = useState<MarketplaceStore[]>([]);
-  const [storeNames, setStoreNames] = useState<Record<string, string>>({ ozon: '', wb: '' });
   const [aiConfig, setAiConfig] = useState({ baseUrl: '', apiKey: '', model: '', configured: false, apiKeyConfigured: false });
   const [aiProvider, setAiProvider] = useState('custom');
   const [aiModels, setAiModels] = useState<string[]>([]);
@@ -34,28 +27,6 @@ export default function SettingsPage() {
   const [aiMessage, setAiMessage] = useState('');
   const [aiError, setAiError] = useState('');
   const [showAiKey, setShowAiKey] = useState(false);
-
-  const refreshConnections = async () => {
-    try {
-      const [rows, storeRows] = await Promise.all([getMarketplaceConnections(), getMarketplaceStores()]);
-      setStores(storeRows.stores);
-      setSettings((current) => ({
-        ...current,
-        connections: {
-          ...current.connections,
-          ...Object.fromEntries(rows.map((row) => [row.marketplace, {
-            connected: row.connected,
-            credentials: {},
-            syncedAt: row.lastSyncAt ? new Date(row.lastSyncAt).getTime() : null,
-          }])),
-        },
-      }));
-    } catch (error) {
-      setConnectionErrors((current) => ({ ...current, _global: formatApiError(error) }));
-    }
-  };
-
-  useEffect(() => { void refreshConnections(); }, []);
 
   useEffect(() => {
     void getAiAssistantConfig().then((config) => {
@@ -102,77 +73,6 @@ export default function SettingsPage() {
     saveSettings(next);
   };
 
-  const setCredential = (pid: string, key: string, value: string) => {
-    const conn = settings.connections[pid];
-    update({
-      ...settings,
-      connections: {
-        ...settings.connections,
-        [pid]: { ...conn, credentials: { ...conn.credentials, [key]: value } },
-      },
-    });
-  };
-
-  const connect = async (pid: string) => {
-    if (pid !== 'ozon' && pid !== 'wb') return;
-    const credentials = settings.connections[pid].credentials;
-    setBusy(pid);
-    setConnectionErrors((current) => ({ ...current, [pid]: '' }));
-    try {
-      await connectMarketplace(
-        pid as MarketplaceId,
-        pid === 'ozon'
-          ? { clientId: credentials.clientId ?? '', apiKey: credentials.apiKey ?? '', storeName: storeNames.ozon }
-          : { apiKey: credentials.apiKey ?? '', storeName: storeNames.wb },
-      );
-      await refreshConnections();
-      setSettings((current) => {
-        const next = {
-          ...current,
-          connections: {
-            ...current.connections,
-            [pid]: { ...current.connections[pid], credentials: {} },
-          },
-        };
-        saveSettings(next);
-        return next;
-      });
-    } catch (error) {
-      setConnectionErrors((current) => ({ ...current, [pid]: formatApiError(error) }));
-    } finally {
-      setBusy(null);
-    }
-  };
-
-  const disconnect = async (pid: string) => {
-    if (pid !== 'ozon' && pid !== 'wb') return;
-    setBusy(pid);
-    try {
-      const ids = stores.filter((store) => store.marketplace === (pid === 'ozon' ? 'ozon' : 'wildberries')).map((store) => store.id);
-      if (ids.length) await Promise.all(ids.map((id) => deleteMarketplaceStore(id)));
-      else await disconnectMarketplace(pid as MarketplaceId);
-      await refreshConnections();
-    } catch (error) {
-      setConnectionErrors((current) => ({ ...current, [pid]: formatApiError(error) }));
-    } finally {
-      setBusy(null);
-    }
-  };
-
-  const syncNow = async (pid: string) => {
-    if (pid !== 'ozon' && pid !== 'wb') return;
-    setBusy(pid);
-    setConnectionErrors((current) => ({ ...current, [pid]: '' }));
-    try {
-      await getMarketplaceDashboard('30d', pid === 'wb' ? 'wildberries' : 'ozon');
-      await refreshConnections();
-    } catch (error) {
-      setConnectionErrors((current) => ({ ...current, [pid]: formatApiError(error) }));
-    } finally {
-      setBusy(null);
-    }
-  };
-
   const toggleNotification = (key: keyof AppSettings['notifications']) => {
     update({
       ...settings,
@@ -184,7 +84,7 @@ export default function SettingsPage() {
     <>
       <div className="page-header">
         <div>
-          <h1>Настройки</h1>
+          <h1>Подключения API</h1>
           <div className="subtitle">Управление подключениями и профилем</div>
         </div>
       </div>
@@ -207,113 +107,7 @@ export default function SettingsPage() {
         </button>
       </div>
 
-      {tab === 'api' && (
-        <div>
-          {connectionErrors._global ? <div className="info-banner" role="alert">{connectionErrors._global}</div> : null}
-          <div className="info-banner">
-            <Info size={17} />
-            <div>
-              <strong>Как подключить API</strong>
-              <br />
-              Получите API-ключ в личном кабинете маркетплейса и введите его здесь. Поддерживаются серверные подключения Ozon и Wildberries. Ключи отправляются на защищённый серверный endpoint и сохраняются там в зашифрованном виде. Для работы требуется активная сессия аккаунта.
-            </div>
-          </div>
-
-          {API_PLATFORMS.filter((p) => p.id === 'ozon' || p.id === 'wb').map((p) => {
-            const conn = settings.connections[p.id];
-            return (
-              <div className={`conn-card${conn.connected ? ' connected' : ''}`} key={p.id} style={{ marginBottom: 14 }}>
-                <div className="conn-head">
-                  <div className="conn-title">
-                    <span className="chip" style={{ background: p.color }}>{p.initial}</span>
-                    <div>
-                      <h3>{p.name}</h3>
-                      <p>{p.description}</p>
-                    </div>
-                  </div>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 10, flex: 'none' }}>
-                    {conn.connected ? (
-                      <>
-                        <span className="badge badge-green" style={{ gap: 6 }}>
-                          <span style={{ width: 7, height: 7, borderRadius: 99, background: 'var(--green)', display: 'inline-block' }} />
-                          Синхронизация: {conn.syncedAt ? timeAgo(Math.floor((Date.now() - conn.syncedAt) / 1000)) : '…'}
-                        </span>
-                        <span className="badge badge-green">Магазинов: {stores.filter((store) => store.marketplace === (p.id === 'ozon' ? 'ozon' : 'wildberries')).length}</span>
-                      </>
-                    ) : (
-                      <button
-                        className="btn btn-primary btn-sm"
-                        onClick={() => void connect(p.id)}
-                        disabled={busy === p.id || !(p.id === 'ozon' ? (conn.credentials.clientId ?? '').trim() && (conn.credentials.apiKey ?? '').trim() : (conn.credentials.apiKey ?? '').trim())}
-                      >
-                        <Check size={13} />
-                        {busy === p.id ? 'Проверка…' : 'Подключить'}
-                      </button>
-                    )}
-                  </div>
-                </div>
-
-                {connectionErrors[p.id] ? <div className="info-banner" role="alert">{connectionErrors[p.id]}</div> : null}
-              <div className="conn-fields">
-                  <div className="field">
-                    <label>Название магазина</label>
-                    <input className="input" name={`marketplace-${p.id}-store-name`} autoComplete="organization" placeholder={`Магазин ${p.name}`} value={storeNames[p.id === 'ozon' ? 'ozon' : 'wb']} onChange={(e) => setStoreNames((current) => ({ ...current, [p.id === 'ozon' ? 'ozon' : 'wb']: e.target.value }))} maxLength={120} />
-                  </div>
-                  {p.fields.filter((f) => p.id === 'ozon' || f.key !== 'clientId').map((f) => (
-                    <div className="field" key={f.key}>
-                      <label>{f.label}</label>
-                      <div style={{ position: 'relative' }}>
-                        <input
-                          className="input"
-                          style={{ paddingRight: 38 }}
-                          type={showSecret[`${p.id}-${f.key}`] ? 'text' : 'password'}
-                          name={`marketplace-${p.id}-${f.key}`}
-                          autoComplete="new-password"
-                          placeholder={f.placeholder}
-                          value={conn.credentials[f.key] ?? ''}
-                          onChange={(e) => setCredential(p.id, f.key, e.target.value)}
-                        />
-                        <button
-                          type="button"
-                          aria-label="Показать или скрыть"
-                          onClick={() => setShowSecret((s) => ({ ...s, [`${p.id}-${f.key}`]: !s[`${p.id}-${f.key}`] }))}
-                          style={{ position: 'absolute', right: 10, top: 8, background: 'none', border: 0, cursor: 'pointer', color: 'var(--muted)', padding: 2, display: 'flex' }}
-                        >
-                          {showSecret[`${p.id}-${f.key}`] ? <EyeOff size={16} /> : <Eye size={16} />}
-                        </button>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-
-                <div className="conn-actions">
-                  <a className="link" href={p.docsUrl} target="_blank" rel="noreferrer" style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}>
-                    <ExternalLink size={13} />
-                    Документация API
-                  </a>
-                  {conn.connected ? (
-                    <>
-                      <button className="link" style={{ background: 'none', border: 0, cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 6 }} onClick={() => void syncNow(p.id)}><RefreshCw size={13} /> Синхронизировать сейчас</button>
-                      <button className="btn btn-primary btn-sm" onClick={() => void connect(p.id)} disabled={busy === p.id || !(p.id === 'ozon' ? (conn.credentials.clientId ?? '').trim() && (conn.credentials.apiKey ?? '').trim() : (conn.credentials.apiKey ?? '').trim())}><Check size={13} /> {busy === p.id ? 'Проверка…' : 'Добавить магазин'}</button>
-                    </>
-                  ) : null}
-                </div>
-                {stores.filter((store) => store.marketplace === (p.id === 'ozon' ? 'ozon' : 'wildberries')).map((store) => <div key={store.id} className="conn-actions" style={{ borderTop: '1px solid var(--border)', paddingTop: 10 }}><span><strong>{store.storeName}</strong>{store.lastSyncAt ? ` · Синхронизация ${timeAgo(Math.floor((Date.now() - new Date(store.lastSyncAt).getTime()) / 1000))}` : ''}</span><button className="btn btn-danger btn-sm" onClick={() => void deleteMarketplaceStore(store.id).then(refreshConnections)}><X size={13} /> Отключить</button></div>)}
-              </div>
-            );
-          })}
-
-          <div className="info-banner" style={{ background: '#f2f5f7', borderColor: 'var(--border)', color: '#45535f' }}>
-            <ShieldCheck size={17} />
-            <div>
-              <strong>Защита данных</strong>
-              <br />
-              Ключи не сохраняются в браузере: они передаются серверу только при подключении. Сервер хранит их в зашифрованном виде. Используйте ключи с минимально необходимыми правами.
-            </div>
-          </div>
-
-        </div>
-      )}
+      {tab === 'api' && <ApiConnections />}
 
       {tab === 'ai' && (
         <section className="card ai-settings-card">
