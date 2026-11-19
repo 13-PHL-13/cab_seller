@@ -2,7 +2,7 @@ import { useRef } from 'react';
 import guides from '@/data/api-guides.json';
 import './api-connections.css';
 
-export default function ApiGuide({ platform }: { platform: 'wb' | 'ozon' }) {
+export default function ApiGuide({ platform, embedded = false }: { platform: 'wb' | 'ozon'; embedded?: boolean }) {
   const guide = guides[platform], part = guide.parts[0], video = useRef<HTMLVideoElement>(null);
   const root = `${import.meta.env.BASE_URL}assets/api-guides/`;
   function seek(time: number) {
@@ -12,9 +12,7 @@ export default function ApiGuide({ platform }: { platform: 'wb' | 'ozon' }) {
     if (element.readyState >= 1) setTime();
     else { element.addEventListener('loadedmetadata', setTime, { once: true }); element.load(); }
   }
-  return <details className="connection-guide">
-    <summary>Как подключить {guide.name} <span>Видео и пошаговая инструкция</span></summary>
-    <div className="connection-guide-body">
+  const body = <div className="connection-guide-body">
       <p>{guide.intro}</p>
       {platform === 'ozon' && <p><strong>Для одного магазина нужны оба доступа:</strong> Seller API — Client ID и API Key; Performance API — отдельные Client ID и Client Secret.</p>}
       <video ref={video} controls preload="none" playsInline poster={root + part.media + '-poster.jpg'} aria-label={`Подключение ${guide.name}`}>
@@ -36,6 +34,10 @@ export default function ApiGuide({ platform }: { platform: 'wb' | 'ozon' }) {
       </li>)}</ol>
       <div className="connection-success">{platform === 'ozon' ? 'Вставьте Client ID и API Key в блок Seller API, а отдельные Client ID и Client Secret — в блок Performance API формы одного магазина.' : 'Вставьте скопированный токен в поле «API-токен» формы магазина Wildberries.'}</div>
       <p><a href={guide.url} className="link" target="_blank" rel="noreferrer">Открыть настройки API {guide.name} ↗</a></p>
-    </div>
+    </div>;
+  return embedded ? <section className="connection-guide connection-guide-embedded" aria-label={`Инструкция подключения ${guide.name}`}>
+    <h3>Как подключить {guide.name}</h3>{body}
+  </section> : <details className="connection-guide">
+    <summary>Как подключить {guide.name} <span>Видео и пошаговая инструкция</span></summary>{body}
   </details>;
 }
