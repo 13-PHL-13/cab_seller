@@ -743,10 +743,16 @@ router.get("/marketplace/dashboard", async (req, res): Promise<void> => {
           }
           const cacheKey = [companyIdFromRequest(req), target, connection.id, req.query.layout === 'prototype' ? createHash('sha256').update(connection.credentialsCiphertext).digest('hex') : connection.updatedAt.getTime(), from, to].join(":");
           const credentials = decryptCredentials<Record<string, string>>(connection.credentialsCiphertext);
+          // Ozon validates against its server day, which may lag the company calendar.
+          const requestTo = target === 'ozon' && req.query.layout === 'prototype'
+            ? [to, new Date().toISOString().slice(0, 10)].sort()[0] : to;
           const snapshot = await getCachedSnapshot(cacheKey, () => target === "ozon"
-            ? getOzonSnapshot(credentials as { clientId: string; apiKey: string }, from, to)
+            ? getOzonSnapshot(credentials as { clientId: string; apiKey: string }, from, requestTo)
             : getWildberriesSnapshot(credentials as { apiKey: string }, from, to));
           const detail = dashboardStoreData(snapshot,target);
+          if (requestTo !== to) {
+            for (const key of Object.keys(detail.totals) as Array<keyof typeof detail.totals>) detail.totals[key] = null;
+          }
           if (!['owner','admin'].includes(req.companyRole??'') && !req.companyPermissions?.canSeeFinance) {
             detail.totals.orderAmount=null;detail.totals.boughtAmount=null;
             for(const point of detail.daily){point.orderAmount=null;point.boughtAmount=null;}

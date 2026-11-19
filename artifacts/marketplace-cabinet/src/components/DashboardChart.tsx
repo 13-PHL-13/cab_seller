@@ -144,7 +144,6 @@ export default function DashboardChart({
     <div
       className="dashboard-chart"
       ref={container}
-      onMouseLeave={() => setActive(null)}
     >
       <div className="plot">
         <svg
@@ -178,6 +177,7 @@ export default function DashboardChart({
                 y={y((max * k) / 4) + 4}
                 textAnchor="end"
                 className="axis-label"
+                opacity={all.length ? 1 : 0}
               >
                 {unit === "money"
                   ? ((max * k) / 4 / divisor).toLocaleString("ru-RU", {
