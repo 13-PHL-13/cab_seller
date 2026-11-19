@@ -1,4 +1,5 @@
 export interface TaskBlockContext {
+  sectionId?: 'products';
   section: string;
   stores: string;
   period: string;
@@ -21,6 +22,7 @@ export function parseTaskBlock(value: unknown): TaskBlockContext | null {
   )
     throw new Error("Некорректный контекст поручения.");
   const result: TaskBlockContext = {
+    ...(v.sectionId==='products'?{sectionId:'products' as const}:{}),
     section: v.section.slice(0, 200),
     stores: v.stores.slice(0, 300),
     period: v.period.slice(0, 100),
@@ -28,7 +30,7 @@ export function parseTaskBlock(value: unknown): TaskBlockContext | null {
   };
   if (
     typeof v.reference === "string" &&
-    /^\/[?#]/.test(v.reference) &&
+    /^(?:\/[?#]|\/(?:costs|unit)\?)/.test(v.reference) &&
     v.reference.length < 1000
   )
     result.reference = v.reference;
@@ -71,7 +73,7 @@ export function mayReceiveBlock(
   if (member.role === "owner" || member.role === "admin") return true;
   return (
     member.canSeeFinance &&
-    member.sections.includes("dashboard") &&
+    member.sections.includes(context.sectionId ?? "dashboard") &&
     (member.storeAccess === "all" ||
       context.storeIds.every((id) => member.storeAccess.includes(id)))
   );

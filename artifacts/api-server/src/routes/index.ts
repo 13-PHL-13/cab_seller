@@ -5,6 +5,7 @@ import healthRouter from "./health";
 import marketplaceRouter from "./marketplace";
 import workspaceRouter from "./workspace";
 import tasksRouter from "./tasks";
+import commerceRouter from './commerce';
 
 const router: IRouter = Router();
 
@@ -14,5 +15,6 @@ router.use(marketplaceRouter);
 router.use(cogsRouter);
 router.use(workspaceRouter);
 router.use(tasksRouter);
+router.use(commerceRouter);
 
 export default router;

@@ -9,7 +9,7 @@ import { getWildberriesFinanceReport } from "../lib/marketplace-finance";
 import { getOzonFinanceReport } from "../lib/marketplace-finance-ozon";
 import { getOzonSnapshot } from "../lib/marketplace-data";
 import { requireUser } from "../middlewares/requireUser";
-import { requireCompanySection, requireCogsEditor } from "../middlewares/requireCompanyAccess";
+import { requireCompanySection, requireCogsEditor, requireCompanyFinance } from "../middlewares/requireCompanyAccess";
 import { decryptCredentials } from "../lib/marketplace-credentials";
 import {
   createMediaFilename,
@@ -385,6 +385,7 @@ async function getMinPriceSource(req: import("express").Request, marketplace: "o
     let storePayout = 0;
     if (marketplace === "wildberries") {
       const report = await getWildberriesFinanceReport(credentials.apiKey ?? "", from, to);
+      if(report.incomplete)throw new Error('Предыдущий месяц загружен не полностью. Минимальные цены пока не рассчитаны.');
       storeRevenue = report.totals.retailAmount;
       storePayout = report.totals.sellerPayout;
     } else {
@@ -392,6 +393,7 @@ async function getMinPriceSource(req: import("express").Request, marketplace: "o
       storeRevenue = [...sales.daily.values()].reduce((sum, point) => sum + point.revenue, 0);
       const reports = [];
       for (const period of dateChunks(from, to, 7)) reports.push(await getOzonFinanceReport(credentials as { clientId: string; apiKey: string }, period.from, period.to));
+      if(reports.some(r=>r.totals.missingAmountRows>0))throw new Error('В финансовом отчёте отсутствуют суммы. Минимальные цены пока не рассчитаны.');
       storePayout = reports.reduce((sum, report) => sum + report.totals.accrued, 0);
     }
     const payoutRate = storeRevenue > 0 ? storePayout / storeRevenue : 0;
@@ -403,7 +405,7 @@ async function getMinPriceSource(req: import("express").Request, marketplace: "o
   return connections.length && revenue > 0 ? { revenue, payout, payoutRate: payout / revenue } : null;
 }
 
-router.get("/cogs/min-prices", async (req, res): Promise<void> => {
+router.get("/cogs/min-prices", requireCompanyFinance, async (req, res): Promise<void> => {
   const { from, to } = previousCompleteMonth();
   const targetMarginPercent = typeof req.query.targetMarginPercent === "string" ? Number(req.query.targetMarginPercent) : 0;
   if (!Number.isFinite(targetMarginPercent) || targetMarginPercent < 0 || targetMarginPercent > 60) {

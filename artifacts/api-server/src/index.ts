@@ -1,6 +1,7 @@
 import app from "./app";
 import { logger } from "./lib/logger";
 import { ensureCollaborationSchema } from './lib/collaboration-schema';
+import { ensureCommerceSchema } from './routes/commerce';
 
 const rawPort = process.env["PORT"];
 
@@ -17,6 +18,7 @@ if (Number.isNaN(port) || port <= 0) {
 }
 
 await ensureCollaborationSchema();
+await ensureCommerceSchema();
 
 app.listen(port, (err) => {
   if (err) {

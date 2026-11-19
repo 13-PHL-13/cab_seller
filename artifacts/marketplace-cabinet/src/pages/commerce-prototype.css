@@ -1,0 +1,21 @@
+.main:has(.commerce-prototype){background:#fff}
+.commerce-prototype{min-width:0;color:#183c2f;font-family:'Segoe UI',Arial,sans-serif}
+.commerce-prototype h1,.commerce-prototype h2,.commerce-prototype h3,.commerce-prototype p{margin:0}
+.commerce-prototype button,.commerce-prototype input,.commerce-prototype select{font-family:inherit}
+.commerce-prototype button{cursor:pointer}
+.commerce-prototype button:disabled{cursor:default}
+.commerce-prototype button:focus-visible,.commerce-prototype input:focus-visible,.commerce-prototype select:focus-visible,.commerce-prototype a:focus-visible{outline:3px solid #338dbe;outline-offset:3px}
+.commerce-prototype .commerce-save-status{font-size:12px;color:#176b58;margin-bottom:12px;line-height:1.6}
+.commerce-prototype .commerce-save-status:empty{display:none}
+.commerce-prototype .is-error{color:#a63843}
+.commerce-prototype .commerce-actions{display:flex;justify-content:flex-end;gap:7px;flex-wrap:wrap;margin-left:auto}
+.commerce-prototype .commerce-actions button{display:inline-flex;align-items:center;justify-content:center;gap:6px;border:1px solid #96bdb1;background:#e8f3ed;color:#176b58;border-radius:7px;padding:7px 10px;min-height:32px;font-size:11px;font-weight:600;white-space:nowrap}
+.commerce-prototype .commerce-actions .commerce-ask{background:#e1f0ed}
+.commerce-prototype .commerce-actions svg{width:16px;height:16px;flex:none}
+.commerce-prototype .market-dot{width:8px;height:8px;border-radius:50%;display:inline-block}
+.commerce-prototype .market-dot.wb{background:#a02edd}.commerce-prototype .market-dot.ozon{background:#157bee}
+.commerce-prototype .ue-dialog,.commerce-prototype .cost-column-dialog{margin:auto}
+.commerce-prototype .ue-note,.commerce-prototype .ue-warning{margin:12px 0}
+.commerce-prototype #ue-status:empty{display:none}
+.commerce-prototype .cost-price-table .cost-sticky{left:0}
+@media(max-width:620px){.commerce-prototype .commerce-actions{width:100%}.commerce-prototype .cost-page-head h1{font-size:23px}.commerce-prototype .cost-local-badge{white-space:normal}}

@@ -20,6 +20,7 @@ export interface DashboardWindow {
   partialErrors: string[];
 }
 export interface BlockContext {
+  sectionId?: 'products';
   section: string;
   stores: string;
   period: string;

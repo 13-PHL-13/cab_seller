@@ -15,7 +15,7 @@ export const companyTasksTable = pgTable("company_tasks", {
   dueDate: text("due_date"),
   dueTime: text("due_time"),
   delegators: text("delegators").array().notNull().default([]),
-  context: jsonb("context").$type<{ section: string; stores: string; period: string; storeIds?:string[]; reference?:string; image?:{dataUrl:string;width:number;height:number;at:string} } | null>(),
+  context: jsonb("context").$type<{ section: string; sectionId?:'products'; stores: string; period: string; storeIds?:string[]; reference?:string; image?:{dataUrl:string;width:number;height:number;at:string} } | null>(),
   assigneeUserId: uuid("assignee_user_id").references(() => usersTable.id, { onDelete: "set null" }),
   createdBy: uuid("created_by").notNull().references(() => usersTable.id, { onDelete: "cascade" }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),

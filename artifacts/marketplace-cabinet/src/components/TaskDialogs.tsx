@@ -19,7 +19,7 @@ function TaskContents({task,close,saved,context}:{context:BlockContext|null;task
  const [comment,setComment]=useState(''),[error,setError]=useState(''),[busy,setBusy]=useState(false),[delegating,setDelegating]=useState(false),[target,setTarget]=useState('');
  const current=workspace?.currentUserId;
  const source=task?.context??context;
- const people=workspace?.members.filter(m=>m.userId!==current&&(['owner','admin'].includes(m.role)||m.sections.includes('tasks'))&&(!source||['owner','admin'].includes(m.role)||(m.canSeeFinance&&m.sections.includes('dashboard')&&(m.storeAccess==='all'||(source.storeIds??[]).every(id=>m.storeAccess.includes(id))))))??[];
+ const people=workspace?.members.filter(m=>m.userId!==current&&(['owner','admin'].includes(m.role)||m.sections.includes('tasks'))&&(!source||['owner','admin'].includes(m.role)||(m.canSeeFinance&&m.sections.includes(source.sectionId??'dashboard')&&(m.storeAccess==='all'||(source.storeIds??[]).every(id=>m.storeAccess.includes(id))))))??[];
  const mine=task?.assigneeUserId===current,working=mine&&!!task&&['open','in_progress','revision'].includes(task.status),review=task?.createdBy===current&&task?.status==='review';
  async function run(fn:()=>Promise<string>){setBusy(true);setError('');try{const taskId=await fn();await saved(taskId);setComment('');setDelegating(false);}catch(e){setError((e as Error).message);}finally{setBusy(false);}}
  async function create(e:FormEvent<HTMLFormElement>){e.preventDefault();const f=new FormData(e.currentTarget);await run(async()=>{const result=await request<Task>('/api/tasks',{method:'POST',body:JSON.stringify({...Object.fromEntries(f),context})});return result.id;});}
