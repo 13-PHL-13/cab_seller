@@ -28,3 +28,4 @@
 @media(max-width:1050px){.store-connect-dialog{height:auto;overflow:auto}.store-connect-layout{grid-template-columns:1fr;gap:28px}.store-connect-form-pane,.store-connect-guide-pane{overflow:visible;scrollbar-gutter:auto}.store-connect-guide-pane{padding:20px}}
 @media(max-width:700px){.store-connect-dialog{padding:18px;width:calc(100vw - 20px);max-height:94dvh}.store-connect-dialog-header h2{font-size:21px}.store-connect-guide-pane{padding:16px}}
 @media(max-width:1050px){.store-connect-dialog{grid-template-rows:auto auto;align-content:start}.store-connect-layout{grid-template-rows:auto auto;align-content:start}}
+@media(max-width:1050px){.store-connect-dialog[open],.store-connect-layout{display:block}.store-connect-dialog-header{margin-bottom:20px}.store-connect-guide-pane{margin-top:28px}}
