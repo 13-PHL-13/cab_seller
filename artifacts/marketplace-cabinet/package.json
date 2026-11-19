@@ -8,7 +8,7 @@
     "build": "vite build --config vite.config.ts",
     "preview": "vite preview --config vite.config.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "node --experimental-strip-types --test tests/dashboard-model.test.mjs tests/commerce-model.test.mjs"
+    "test": "node --experimental-strip-types --test tests/dashboard-model.test.mjs tests/commerce-model.test.mjs tests/commerce-context.test.mjs"
   },
   "dependencies": {
     "lucide-react": "^0.545.0",
