@@ -13,7 +13,7 @@ import {
 import { db, aiConversationsTable, aiMessagesTable, cogsProductsTable, marketplaceConnectionsTable, sellerExpensesTable } from "@workspace/db";
 import { routerBalance } from '../lib/ai-balance';
 import { cogsProductMarketplacesTable } from "@workspace/db/schema";
-import { and, asc, desc, eq, gte, inArray, lte } from "drizzle-orm";
+import { and, asc, desc, eq, gte, inArray, lte, sql } from "drizzle-orm";
 import { Router, type IRouter } from "express";
 import { requireUser } from "../middlewares/requireUser";
 import { requireCompanyFinance, requireCompanySection, requireMarketplaceAccess } from "../middlewares/requireCompanyAccess";
@@ -383,7 +383,7 @@ router.post("/marketplace/ai-chat", async (req, res): Promise<void> => {
       }).returning({ id: aiConversationsTable.id });
       conversationId = conversation.id;
     } else {
-      await db.update(aiConversationsTable).set({ context: rawContext, updatedAt: new Date() }).where(and(
+      await db.update(aiConversationsTable).set({ context: rawContext, title: sql`CASE WHEN ${aiConversationsTable.title} = 'Новый диалог' THEN ${lastQuestion.slice(0,120)} ELSE ${aiConversationsTable.title} END`, updatedAt: new Date() }).where(and(
         eq(aiConversationsTable.id, conversationId), eq(aiConversationsTable.companyId, companyIdFromRequest(req)),
       ));
     }
