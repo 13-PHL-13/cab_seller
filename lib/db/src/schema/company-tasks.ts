@@ -1,8 +1,8 @@
-import { index, pgTable, text, timestamp, uuid } from "drizzle-orm/pg-core";
+import { index, jsonb, pgTable, text, timestamp, uuid } from "drizzle-orm/pg-core";
 import { companiesTable } from "./workspace";
 import { usersTable } from "./auth";
 
-export type CompanyTaskStatus = "open" | "in_progress" | "review" | "completed" | "archived";
+export type CompanyTaskStatus = "open" | "in_progress" | "review" | "revision" | "completed" | "archived";
 export type CompanyTaskPriority = "low" | "normal" | "high" | "urgent";
 
 export const companyTasksTable = pgTable("company_tasks", {
@@ -13,6 +13,9 @@ export const companyTasksTable = pgTable("company_tasks", {
   status: text("status").$type<CompanyTaskStatus>().notNull().default("open"),
   priority: text("priority").$type<CompanyTaskPriority>().notNull().default("normal"),
   dueDate: text("due_date"),
+  dueTime: text("due_time"),
+  delegators: text("delegators").array().notNull().default([]),
+  context: jsonb("context").$type<{ section: string; stores: string; period: string } | null>(),
   assigneeUserId: uuid("assignee_user_id").references(() => usersTable.id, { onDelete: "set null" }),
   createdBy: uuid("created_by").notNull().references(() => usersTable.id, { onDelete: "cascade" }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),

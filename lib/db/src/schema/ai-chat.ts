@@ -1,4 +1,4 @@
-import { index, pgTable, text, timestamp, uuid } from "drizzle-orm/pg-core";
+import { boolean, index, pgTable, text, timestamp, uuid } from "drizzle-orm/pg-core";
 import { companiesTable } from "./workspace";
 import { usersTable } from "./auth";
 
@@ -7,6 +7,7 @@ export const aiConversationsTable = pgTable("ai_conversations", {
   companyId: uuid("company_id").notNull().references(() => companiesTable.id, { onDelete: "cascade" }),
   createdBy: uuid("created_by").notNull().references(() => usersTable.id, { onDelete: "cascade" }),
   title: text("title").notNull().default("Новый диалог"),
+  archived: boolean("archived").notNull().default(false),
   context: text("context").notNull().default("{}"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow().$onUpdate(() => new Date()),
