@@ -7,6 +7,7 @@ import type { BlockContext } from "@/lib/dashboard-model";
 import { makeRuntime, type CommerceBootstrap } from "@/commerce/runtime";
 import { initCosts } from "@/commerce/costs.js";
 import { initUnitEconomics } from "@/commerce/unit.js";
+import { commerceContext } from "@/commerce/context";
 import "@/commerce/costs.css";
 import "@/commerce/unit.css";
 import "./commerce-prototype.css";
@@ -51,6 +52,23 @@ function CommercePage({ kind }: { kind: "costs" | "unit" }) {
           runtime,
         );
         const params = new URLSearchParams(location.search);
+        if (kind === "unit" && params.has("from"))
+          document.dispatchEvent(
+            new CustomEvent("unit-source-open", {
+              detail: {
+                filters: {
+                  from: params.get("from"),
+                  to: params.get("to"),
+                  platform: params.get("platform") ?? "all",
+                  basis: params.get("basis") ?? "sales",
+                  stores: params.get("stores")
+                    ? params.get("stores")!.split(",")
+                    : null,
+                },
+                product: params.get("product"),
+              },
+            }),
+          );
         if (kind === "costs" && params.has("tab"))
           document.dispatchEvent(
             new CustomEvent("cost-source-open", {
@@ -99,7 +117,16 @@ function CommercePage({ kind }: { kind: "costs" | "unit" }) {
                         tab: source?.reference?.tab ?? "minimum",
                         scope: source?.reference?.scope ?? "all",
                       })
-                    : "/unit?source=chart",
+                    : "/unit?" +
+                      new URLSearchParams({
+                        from: source?.reference?.filters?.from ?? "",
+                        to: source?.reference?.filters?.to ?? "",
+                        platform: source?.reference?.filters?.platform ?? "all",
+                        basis: source?.reference?.filters?.basis ?? "sales",
+                        stores:
+                          source?.reference?.filters?.stores?.join(",") ?? "",
+                        product: source?.reference?.product ?? "",
+                      }),
               };
             };
             if (callbacks.current.ai.allowed) {
@@ -114,7 +141,7 @@ function CommercePage({ kind }: { kind: "costs" | "unit" }) {
                     ? element.costContext?.()
                     : element.unitContext?.();
                 void callbacks.current.ai.openBlock(
-                  JSON.stringify({ ...context(), data: source?.data }),
+                  commerceContext({ ...context() }, source?.data),
                 );
               };
               actions.append(button);

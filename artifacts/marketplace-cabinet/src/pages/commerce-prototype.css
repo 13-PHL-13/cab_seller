@@ -1,6 +1,7 @@
 .main:has(.commerce-prototype){background:#fff}
 .commerce-prototype{min-width:0;color:#183c2f;font-family:'Segoe UI',Arial,sans-serif}
 .commerce-prototype h1,.commerce-prototype h2,.commerce-prototype h3,.commerce-prototype p{margin:0}
+:where(.commerce-prototype) :is(h1,h2,h3,h4,h5){font-weight:700}
 .commerce-prototype button,.commerce-prototype input,.commerce-prototype select{font-family:inherit}
 .commerce-prototype button{cursor:pointer}
 .commerce-prototype button:disabled{cursor:default}

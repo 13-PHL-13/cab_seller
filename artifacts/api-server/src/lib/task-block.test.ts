@@ -1,4 +1,10 @@
 import assert from "node:assert/strict";
+test('commerce task sources retain local references and require product access',()=>{
+ const context=parseTaskBlock({section:'Себестоимость',sectionId:'products',stores:'Магазин',storeIds:['1'],period:'Текущие значения',reference:'/costs?tab=manual'});
+ assert.equal(context?.reference,'/costs?tab=manual');
+ assert.equal(mayReceiveBlock({role:'employee',canSeeFinance:true,sections:['products'],storeAccess:['1']},context!),true);
+ assert.equal(mayReceiveBlock({role:'employee',canSeeFinance:true,sections:['dashboard'],storeAccess:'all'},context!),false);
+});
 import test from "node:test";
 import { parseTaskBlock, mayReceiveBlock } from "./task-block.ts";
 test("task snapshots reject remote URLs, SVG and oversized payloads", () => {

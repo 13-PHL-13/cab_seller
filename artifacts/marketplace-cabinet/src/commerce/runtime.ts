@@ -125,6 +125,7 @@ export function makeRuntime(
           "Сохранение остановлено после ошибки. Сохраните введённые значения и обновите страницу.",
         );
       values[kind] = structuredClone(state);
+      if (kind === "unit" && !boot.permissions.edit) return;
       pending.set(kind, values[kind]);
       notify("Сохраняем изменения…");
       void flush();
