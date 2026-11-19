@@ -11,6 +11,7 @@ import {
   ListMarketplaceConnectionsResponse,
 } from "@workspace/api-zod";
 import { db, aiConversationsTable, aiMessagesTable, cogsProductsTable, marketplaceConnectionsTable, sellerExpensesTable } from "@workspace/db";
+import { routerBalance } from '../lib/ai-balance';
 import { cogsProductMarketplacesTable } from "@workspace/db/schema";
 import { and, asc, desc, eq, gte, inArray, lte } from "drizzle-orm";
 import { Router, type IRouter } from "express";
@@ -109,6 +110,7 @@ router.use("/marketplace/stores", requireMarketplaceAccess);
 router.use("/marketplace/ai-config", requireCompanySection("settings"));
 router.use("/marketplace/ai-models", requireCompanySection("settings"));
 router.use("/marketplace/ai-chat", requireCompanySection("dashboard"));
+router.use("/marketplace/ai-status", requireCompanySection("dashboard"));
 
 function normalizeAiBaseUrl(value: unknown): string | null {
   if (typeof value !== "string" || value.trim().length > 500) return null;
@@ -295,13 +297,36 @@ router.delete("/marketplace/ai-config", async (req, res): Promise<void> => {
   res.status(204).end();
 });
 
+router.get('/marketplace/ai-status', async (req, res): Promise<void> => {
+  const [row] = await db.select().from(marketplaceConnectionsTable).where(and(eq(marketplaceConnectionsTable.companyId, companyIdFromRequest(req)), eq(marketplaceConnectionsTable.marketplace, AI_CONNECTION_ID))).limit(1);
+  if (!row) { res.json({ configured: false, model: '', balance: null, currency: null, tokensRemaining: null, expiresAt: null }); return; }
+  const config = decryptCredentials<AiAssistantCredentials>(row.credentialsCiphertext);
+  let balance: number | null = null;
+  const maySeeBalance = req.companyRole === 'owner' || req.companyRole === 'admin' || req.companyPermissions?.canSeeFinance;
+  if (maySeeBalance && new URL(config.baseUrl).origin === 'https://routerai.ru') { try { balance = await routerBalance(config.apiKey); } catch { /* An unavailable balance is not zero. */ } }
+  res.json({ configured: true, model: config.model, balance, currency: balance === null ? null : 'RUB', tokensRemaining: null, expiresAt: null, tokenLimit: req.companyPermissions?.tokenLimit ?? null });
+});
+
+router.get('/marketplace/ai-chat/list', async (req, res): Promise<void> => {
+  const chats = await db.select({ id: aiConversationsTable.id, title: aiConversationsTable.title, archived: aiConversationsTable.archived, context: aiConversationsTable.context, updatedAt: aiConversationsTable.updatedAt }).from(aiConversationsTable).where(and(eq(aiConversationsTable.companyId, companyIdFromRequest(req)), eq(aiConversationsTable.createdBy, userIdFromRequest(req)))).orderBy(desc(aiConversationsTable.updatedAt));
+  res.json({ chats });
+});
+router.patch('/marketplace/ai-chat/:id', async (req, res): Promise<void> => {
+  if (!/^[0-9a-f-]{36}$/i.test(req.params.id)) { res.status(404).json({ error: 'Чат не найден.' }); return; }
+  const update: Partial<typeof aiConversationsTable.$inferInsert> = { updatedAt: new Date() };
+  if (typeof req.body?.title === 'string' && req.body.title.trim()) update.title = req.body.title.trim().slice(0,120);
+  if (typeof req.body?.archived === 'boolean') update.archived = req.body.archived;
+  const [chat] = await db.update(aiConversationsTable).set(update).where(and(eq(aiConversationsTable.id,req.params.id),eq(aiConversationsTable.companyId,companyIdFromRequest(req)),eq(aiConversationsTable.createdBy,userIdFromRequest(req)))).returning({ id: aiConversationsTable.id });
+  res.status(chat ? 200 : 404).json(chat ?? { error: 'Чат не найден.' });
+});
 router.get("/marketplace/ai-chat", async (req, res): Promise<void> => {
-  const [conversation] = await db.select().from(aiConversationsTable).where(eq(aiConversationsTable.companyId, companyIdFromRequest(req)))
+  const requestedId = typeof req.query.id === 'string' && /^[0-9a-f-]{36}$/i.test(req.query.id) ? req.query.id : null;
+  const [conversation] = await db.select().from(aiConversationsTable).where(and(eq(aiConversationsTable.companyId, companyIdFromRequest(req)),eq(aiConversationsTable.createdBy,userIdFromRequest(req)), ...(requestedId ? [eq(aiConversationsTable.id,requestedId)] : [eq(aiConversationsTable.archived,false)])))
     .orderBy(desc(aiConversationsTable.updatedAt)).limit(1);
   if (!conversation) { res.json({ conversationId: null, messages: [] }); return; }
   const messages = await db.select().from(aiMessagesTable).where(eq(aiMessagesTable.conversationId, conversation.id))
     .orderBy(aiMessagesTable.createdAt).limit(100);
-  res.json({ conversationId: conversation.id, title: conversation.title, messages });
+  res.json({ conversationId: conversation.id, title: conversation.title, context: conversation.context, messages });
 });
 
 router.post("/marketplace/ai-chat/new", async (req, res): Promise<void> => {
@@ -346,7 +371,7 @@ router.post("/marketplace/ai-chat", async (req, res): Promise<void> => {
     let conversationId = "";
     if (requestedConversationId && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(requestedConversationId)) {
       const [existing] = await db.select({ id: aiConversationsTable.id }).from(aiConversationsTable).where(and(
-        eq(aiConversationsTable.id, requestedConversationId), eq(aiConversationsTable.companyId, companyIdFromRequest(req)),
+        eq(aiConversationsTable.id, requestedConversationId), eq(aiConversationsTable.companyId, companyIdFromRequest(req)), eq(aiConversationsTable.createdBy, ownerId), eq(aiConversationsTable.archived, false),
       )).limit(1);
       conversationId = existing?.id ?? "";
     }

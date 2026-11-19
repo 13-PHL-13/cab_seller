@@ -12,7 +12,6 @@ import {
 import { formatMoney, formatNumber } from "@/lib/format";
 import {
   formatApiError, getMarketplaceConnections, getMarketplaceDashboard,
-  getAiAssistantConfig, getAiAssistantChat, startAiAssistantChat, sendAiAssistantMessage,
   getOzonFinanceReport, getWildberriesFinanceReport, getSellerExpenses,
   createSellerExpense, deleteSellerExpense,
 } from "@/lib/marketplace-api";
@@ -21,6 +20,7 @@ import type {
   OzonFinanceReport, WildberriesFinanceReport,
 } from "@/lib/marketplace-api";
 import "./dashboard-approved.css";
+import { useAiWorkspace } from "@/components/AiWorkspace";
 
 const PERIODS: Array<{ key: MarketplacePeriod; label: string }> = [
   { key: "7d", label: "7 дней" },
@@ -79,23 +79,8 @@ export default function DashboardPage() {
   const [sellerExpenses, setSellerExpenses] = useState<Awaited<ReturnType<typeof getSellerExpenses>> | null>(null);
   const [expenseForm, setExpenseForm] = useState({ expenseDate: previousFullWeek().to, category: "Прочее", description: "", amount: "" });
   const [expenseSaving, setExpenseSaving] = useState(false);
-  const [chatOpen, setChatOpen] = useState(false);
-  const [chatInput, setChatInput] = useState("");
-  const [aiConfig, setAiConfig] = useState<{ configured: boolean; model: string } | null>(null);
-  const [chatBusy, setChatBusy] = useState(false);
-  const [aiConversationId, setAiConversationId] = useState<string | null>(null);
-  const [messages, setMessages] = useState<Array<{ role: "assistant" | "user"; text: string }>>([
-    { role: "assistant", text: "Здравствуйте! Задайте вопрос о данных подключённых магазинов." },
-  ]);
-
-  useEffect(() => {
-    void getAiAssistantConfig().then((config) => setAiConfig({ configured: config.configured, model: config.model }))
-      .catch(() => setAiConfig({ configured: false, model: "" }));
-    void getAiAssistantChat().then((chat) => {
-      setAiConversationId(chat.conversationId);
-      if (chat.messages.length) setMessages(chat.messages.map(({ role, content }) => ({ role, text: content })));
-    }).catch(() => undefined);
-  }, []);
+  const { setAnalytics } = useAiWorkspace();
+  useEffect(() => { setAnalytics(JSON.stringify({ period, marketplace, totals: data ? { revenue: data.revenue, orders: data.orders, units: data.units } : null, recentDailySales: data?.salesSeries.slice(-14) ?? [], dataWarnings: data?.partialErrors ?? [] })); }, [period, marketplace, data, setAnalytics]);
 
   useEffect(() => {
     let active = true;
@@ -213,41 +198,9 @@ export default function DashboardPage() {
   function toggleFinance(key: string) {
     setExpandedFinance((current) => current.includes(key) ? current.filter((item) => item !== key) : [...current, key]);
   }
-  async function sendMessage(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    const question = chatInput.trim();
-    if (!question || chatBusy) return;
-    const conversation = [...messages, { role: "user" as const, text: question }];
-    setMessages(conversation);
-    setChatInput("");
-    if (!aiConfig?.configured) {
-      setMessages([...conversation, { role: "assistant", text: "ИИ-провайдер не настроен. Откройте Настройки → ИИ-помощник, сохраните Base URL, API-ключ и модель." }]);
-      return;
-    }
-    const context = JSON.stringify({
-      period,
-      marketplace,
-      totals: { revenue: data?.revenue ?? 0, orders: data?.orders ?? 0, units: data?.units ?? 0, averageOrderValue: data?.averageOrderValue ?? 0 },
-      recentDailySales: data?.salesSeries.slice(-14) ?? [],
-      funnels: data?.funnels ?? [],
-      dataWarnings: data?.partialErrors ?? [],
-    });
-    setChatBusy(true);
-    try {
-      const result = await sendAiAssistantMessage(
-        conversation.slice(-10).map((item) => ({ role: item.role, content: item.text })),
-        context,
-        aiConversationId,
-      );
-      setAiConversationId(result.conversationId);
-      setMessages((current) => [...current, { role: "assistant", text: result.answer }]);
-    } catch (error) {
-      setMessages((current) => [...current, { role: "assistant", text: `Не удалось получить ответ: ${formatApiError(error)}` }]);
-    } finally { setChatBusy(false); }
-  }
 
   return (
-    <div className={`approved-dashboard ${chatOpen ? "" : "chat-collapsed"}`}>
+    <div className="approved-dashboard chat-collapsed">
       <div className="approved-main">
         <header className="approved-header">
           <div>
@@ -465,29 +418,7 @@ export default function DashboardPage() {
         <footer className="approved-footer">Навигатор продаж <span>Данные берутся из подключённых API. Недоступные показатели не подменяются демонстрационными цифрами.</span></footer>
       </div>
 
-      <aside className="approved-assistant">
-        <div className="approved-assistant-head">
-          <div><Bot size={18} /><strong>ИИ-помощник</strong></div>
-          <div className="approved-assistant-actions">
-            <button title="Новый чат" aria-label="Новый чат" onClick={() => { setAiConversationId(null); setMessages([{ role: "assistant", text: "Новый диалог. Задайте вопрос о данных подключённых магазинов." }]); }} disabled={chatBusy}><Activity size={16} /></button>
-            <button title="Скрыть панель" aria-label="Скрыть панель" onClick={() => setChatOpen(false)}><X size={16} /></button>
-          </div>
-        </div>
-        <div className="approved-assistant-sub">Помощник по вашим данным <span>{aiConfig === null ? "…" : aiConfig.configured ? aiConfig.model : "НЕ НАСТРОЕН"}</span></div>
-        <div className="approved-chat-messages" aria-live="polite">
-          {messages.map((message, index) => <div className={`approved-chat-message ${message.role}`} key={index}>
-            {message.role === "assistant" && <small>ИИ-помощник</small>}{message.text}
-          </div>)}
-          {chatBusy && <div className="approved-chat-message assistant"><small>ИИ-помощник</small>Формирую ответ…</div>}
-        </div>
-        <div className="approved-chat-context"><CircleHelp size={14} /> {connected.length} подключённых площадок · {PERIODS.find((item) => item.key === period)?.label}</div>
-        <form className="approved-chat-form" onSubmit={sendMessage}>
-          <label htmlFor="approved-chat-input">Ваш вопрос</label>
-          <div><textarea id="approved-chat-input" value={chatInput} onChange={(event) => setChatInput(event.target.value)} rows={3} maxLength={2000} placeholder="Спросите о ваших магазинах…" disabled={chatBusy} /><button aria-label="Отправить вопрос" type="submit" disabled={!chatInput.trim() || chatBusy}><Send size={16} /></button></div>
-          <small>{aiConfig?.configured ? `Модель: ${aiConfig.model}` : "Подключите модель в Настройки → ИИ-помощник"}</small>
-        </form>
-      </aside>
-      {!chatOpen && <button className="approved-assistant-open" onClick={() => setChatOpen(true)}><Bot size={16} /> ИИ-помощник</button>}
+
     </div>
   );
 }

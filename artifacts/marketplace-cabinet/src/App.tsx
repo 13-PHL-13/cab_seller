@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react';
-import { Route, Switch, useLocation } from 'wouter';
-import { BarChart3, Filter, LayoutGrid, Menu, Settings, Store, Wallet, Package, UsersRound, ListTodo } from 'lucide-react';
+import { Link, Route, Switch, useLocation } from 'wouter';
+import CollaborationProvider, { useCollaboration } from '@/components/CollaborationProvider';
+import ChatsPage, { AiProvider, AiPanel } from '@/components/AiWorkspace';
+import { BarChart3, Filter, LayoutGrid, Menu, Settings, Store, Wallet, Package, UsersRound, ListTodo, Sparkles } from 'lucide-react';
 import { Logo } from '@/components/Logo';
 import DashboardPage from '@/pages/Dashboard';
 import MarketplacesPage from '@/pages/Marketplaces';
@@ -28,10 +30,13 @@ const NAV = [
   { href: '/products', label: 'Товары', icon: Package, match: (p: string) => p === '/products' || p === '/cogs' },
   { href: '/settings', label: 'Подключения API', icon: Settings, match: (p: string) => p === '/settings' },
   { href: '/team', label: 'Компания и команда', icon: UsersRound, match: (p: string) => p === '/team' },
-  { href: '/tasks', label: 'Задачи', icon: ListTodo, match: (p: string) => p === '/tasks' },
+  { href: '/chats', label: 'Чаты с ИИ', icon: Sparkles, match: (p: string) => p === '/chats' },
+  { href: '/tasks', label: 'Поручения', icon: ListTodo, match: (p: string) => p === '/tasks' },
 ];
 
 function Workspace({ children, userEmail, onLogout }: { children: React.ReactNode; userEmail: string; onLogout: () => void }) {
+  const collaboration = useCollaboration();
+  const receivedCount = collaboration.tasks.filter(task => task.assigneeUserId === collaboration.workspace?.currentUserId && !['completed','archived'].includes(task.status)).length;
   const [location] = useLocation();
   const [open, setOpen] = useState(false);
   const [workspace, setWorkspace] = useState<Workspace | null>(null);
@@ -66,14 +71,14 @@ function Workspace({ children, userEmail, onLogout }: { children: React.ReactNod
   }, []);
   const elevated = workspace?.role === 'owner' || workspace?.role === 'admin';
   const visibleNav = NAV.filter((item) => item.href === '/team' || !workspace || elevated || currentMember?.sections.includes(
-    item.href === '/' ? 'dashboard' : item.href === '/marketplaces' ? 'marketplaces' : item.href.slice(1),
+    item.href === '/' || item.href === '/chats' ? 'dashboard' : item.href === '/marketplaces' ? 'marketplaces' : item.href.slice(1),
   ));
   return (
     <div className="app">
       <aside className={`sidebar${open ? ' open' : ''}`}>
         <div className="brand"><Logo size={36} /><div><div className="brand-name">Навигатор продаж</div><div className="brand-sub">Единый кабинет продавца</div></div></div>
         <nav style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-          {visibleNav.map((item) => { const Icon = item.icon; return <a key={item.href} href={item.href} className={`nav-item${item.match(location) ? ' active' : ''}`} onClick={() => setOpen(false)}><Icon size={17} />{item.label}</a>; })}
+          {visibleNav.map((item) => { const Icon = item.icon; return <Link key={item.href} href={item.href} className={`nav-item${item.match(location) ? ' active' : ''}`} onClick={() => setOpen(false)}><Icon size={17} />{item.label}{item.href === '/tasks' && <span className="task-count">{receivedCount}</span>}</Link>; })}
         </nav>
         <div className="sidebar-footer">© 2026 Навигатор продаж</div>
       </aside>
@@ -84,12 +89,13 @@ function Workspace({ children, userEmail, onLogout }: { children: React.ReactNod
         </div>
         {children}
       </main>
+      <AiPanel />
     </div>
   );
 }
 
 export default function App({ userEmail, onLogout }: { userEmail: string; onLogout: () => void }) {
-  return <ErrorBoundary><Workspace userEmail={userEmail} onLogout={onLogout}><Switch>
+  return <ErrorBoundary><CollaborationProvider><AiProvider><Workspace userEmail={userEmail} onLogout={onLogout}><Switch>
     <Route path="/" component={DashboardPage} />
     <Route path="/marketplaces" component={MarketplacesPage} />
     <Route path="/marketplace/:id" component={MarketplaceDetailPage} />
@@ -101,7 +107,8 @@ export default function App({ userEmail, onLogout }: { userEmail: string; onLogo
     <Route path="/settings" component={SettingsPage} />
     <Route path="/team" component={TeamPage} />
     <Route path="/tasks" component={TasksPage} />
+    <Route path="/chats" component={ChatsPage} />
     <Route path="/invitations/accept" component={TeamPage} />
     <Route component={NotFoundPage} />
-  </Switch></Workspace></ErrorBoundary>;
+  </Switch></Workspace></AiProvider></CollaborationProvider></ErrorBoundary>;
 }
