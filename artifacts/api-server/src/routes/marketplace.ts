@@ -12,6 +12,8 @@ import {
 } from "@workspace/api-zod";
 import { db, aiConversationsTable, aiMessagesTable, cogsProductsTable, marketplaceConnectionsTable, sellerExpensesTable } from "@workspace/db";
 import { routerBalance } from '../lib/ai-balance';
+import { dashboardWindow, dashboardStoreData } from '../lib/dashboard-layout';
+import { createHash } from 'node:crypto';
 import { cogsProductMarketplacesTable } from "@workspace/db/schema";
 import { and, asc, desc, eq, gte, inArray, lte, sql } from "drizzle-orm";
 import { Router, type IRouter } from "express";
@@ -333,6 +335,7 @@ router.post("/marketplace/ai-chat/new", async (req, res): Promise<void> => {
   const [conversation] = await db.insert(aiConversationsTable).values({
     companyId: companyIdFromRequest(req), createdBy: userIdFromRequest(req),
     context: typeof req.body?.context === "string" ? req.body.context.slice(0, 20_000) : "{}",
+    title: typeof req.body?.title === 'string' && req.body.title.trim() ? req.body.title.trim().slice(0,120) : 'Новый диалог',
   }).returning({ id: aiConversationsTable.id });
   res.status(201).json({ conversationId: conversation.id });
 });
@@ -694,7 +697,8 @@ router.get("/marketplace/dashboard", async (req, res): Promise<void> => {
 
   const ownerId = userIdFromRequest(req);
   const { period, marketplace } = query.data;
-  const { from, to } = periodDates(period);
+  const { from, to } = req.query.layout === 'prototype'
+    ? dashboardWindow(req.query.view === 'previous' ? 'previous' : 'current') : periodDates(period);
   const requestedStoreId = storeIdFromRequest(req);
   if (req.query.storeId !== undefined && !requestedStoreId) { res.status(400).json({ error: "Выбран некорректный магазин." }); return; }
   const allowedStores = allowedStoreIds(req);
@@ -712,6 +716,7 @@ router.get("/marketplace/dashboard", async (req, res): Promise<void> => {
   }
   const snapshots = new Map<Marketplace, MarketplaceSnapshot>();
   const partialErrors: string[] = [];
+  const storeDetails: Array<{id:number;storeName:string;marketplace:Marketplace;data:ReturnType<typeof dashboardStoreData>}> = [];
 
   const targets: Marketplace[] =
     marketplace === "all"
@@ -736,11 +741,17 @@ router.get("/marketplace/dashboard", async (req, res): Promise<void> => {
             partialErrors.push(`${connection.storeName}: API временно ограничил запросы. Повторите через ${wait}.`);
             continue;
           }
-          const cacheKey = [companyIdFromRequest(req), target, connection.id, connection.updatedAt.getTime(), from, to].join(":");
+          const cacheKey = [companyIdFromRequest(req), target, connection.id, req.query.layout === 'prototype' ? createHash('sha256').update(connection.credentialsCiphertext).digest('hex') : connection.updatedAt.getTime(), from, to].join(":");
           const credentials = decryptCredentials<Record<string, string>>(connection.credentialsCiphertext);
           const snapshot = await getCachedSnapshot(cacheKey, () => target === "ozon"
             ? getOzonSnapshot(credentials as { clientId: string; apiKey: string }, from, to)
             : getWildberriesSnapshot(credentials as { apiKey: string }, from, to));
+          const detail = dashboardStoreData(snapshot,target);
+          if (!['owner','admin'].includes(req.companyRole??'') && !req.companyPermissions?.canSeeFinance) {
+            detail.totals.orderAmount=null;detail.totals.boughtAmount=null;
+            for(const point of detail.daily){point.orderAmount=null;point.boughtAmount=null;}
+          }
+          storeDetails.push({id:connection.id,storeName:connection.storeName,marketplace:target,data:detail});
           for (const [date, point] of snapshot.daily) {
             const previous = combined.daily.get(date) ?? { ...point, date, revenue: 0, orders: 0, units: 0, views: 0, cartAdds: 0 };
             combined.daily.set(date, {
@@ -771,6 +782,9 @@ router.get("/marketplace/dashboard", async (req, res): Promise<void> => {
     }),
   );
 
+  if (req.query.layout === 'prototype') {
+    res.json({from,to,stores:storeDetails,partialErrors}); return;
+  }
   const salesSeries = datesInRange(from, to).map((date) => {
     const ozonRevenue =
       marketplace === "wildberries"

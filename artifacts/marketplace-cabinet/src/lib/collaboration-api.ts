@@ -1,6 +1,7 @@
+import type { BlockContext } from './dashboard-model';
 export type TaskStatus='open'|'in_progress'|'review'|'revision'|'completed'|'archived';
 export interface TaskMessage {id:string;authorUserId:string;authorEmail?:string;body:string;type:string;createdAt:string}
-export interface Task {id:string;title:string;description:string;createdBy:string;creatorEmail?:string;assigneeUserId:string|null;assigneeEmail?:string;delegators:string[];dueDate:string|null;dueTime:string|null;status:TaskStatus;context:{section:string;stores:string;period:string}|null;messages:TaskMessage[]}
+export interface Task {id:string;title:string;description:string;createdBy:string;creatorEmail?:string;assigneeUserId:string|null;assigneeEmail?:string;delegators:string[];dueDate:string|null;dueTime:string|null;status:TaskStatus;context:BlockContext|null;messages:TaskMessage[]}
 export interface Chat {id:string;title:string;archived:boolean;context:string;updatedAt:string}
 export interface ChatMessage {role:'user'|'assistant';content:string;createdAt?:string}
 export interface AiStatus {configured:boolean;model:string;balance:number|null;currency:string|null;tokensRemaining:number|null;expiresAt:string|null;tokenLimit?:number|null}

@@ -20,6 +20,7 @@ app.use(pinoHttp({
   },
 }));
 app.disable("x-powered-by");
+app.use('/api/tasks', express.json({ limit: '3mb' }));
 app.use(express.json({ limit: "32kb" }));
 app.use(express.urlencoded({ extended: true, limit: "32kb" }));
 app.use("/api", router);
@@ -44,6 +45,9 @@ app.use((error: unknown, req: Request, res: Response, next: NextFunction) => {
   if (res.headersSent) {
     next(error);
     return;
+  }
+  if (error && typeof error === 'object' && 'status' in error && error.status === 413) {
+    res.status(413).json({ error: 'Снимок блока слишком большой. Сверните лишнюю детализацию и повторите.' }); return;
   }
   logger.error({ err: error, requestId: req.id }, "Unhandled API request error");
   res.status(500).json({ error: "Внутренняя ошибка сервера. Попробуйте позже." });

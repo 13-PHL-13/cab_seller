@@ -24,6 +24,8 @@ jobs:
         run: pnpm install --no-frozen-lockfile
       - name: API unit tests
         run: pnpm --filter @workspace/api-server test
+      - name: Dashboard data model tests
+        run: pnpm --filter @workspace/marketplace-cabinet test
       - name: Typecheck and build
         env:
           PORT: 4173
