@@ -4,6 +4,7 @@ import { db, companyMembershipsTable, companyTaskMessagesTable, companyTasksTabl
 import { requireUser } from '../middlewares/requireUser';
 import { requireCompanySection } from '../middlewares/requireCompanyAccess';
 import { taskTransition, validateDeadline, type TaskAction } from '../lib/task-policy';
+import { parseTaskBlock, mayReceiveBlock } from '../lib/task-block';
 const router: IRouter = Router();
 router.use('/tasks', requireUser, requireCompanySection('tasks'));
 const uuid = (id: unknown): id is string => typeof id === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(id);
@@ -27,11 +28,12 @@ router.post('/tasks',async(req,res,next)=>{
   const assignee=req.body?.assigneeUserId;
   if(!title||!uuid(assignee)||assignee===req.userId){res.status(400).json({error:'Укажите поручение и выберите другого исполнителя.'});return;}
   let deadline;try{deadline=validateDeadline(req.body?.dueDate,req.body?.dueTime);}catch(error){res.status(400).json({error:(error as Error).message});return;}
+  let context;try{context=parseTaskBlock(req.body?.context);}catch(error){res.status(400).json({error:(error as Error).message});return;}
+  if(context && !['owner','admin'].includes(req.companyRole??'') && (!req.companyPermissions || !mayReceiveBlock(req.companyPermissions,context))){res.status(403).json({error:'Нет доступа к аналитике поручения.'});return;}
   const result=await db.transaction(async tx=>{
-   const [member]=await tx.select({id:companyMembershipsTable.userId}).from(companyMembershipsTable).where(and(eq(companyMembershipsTable.companyId,req.companyId!),eq(companyMembershipsTable.userId,assignee),sql`(${companyMembershipsTable.role} IN ('owner','admin') OR ${companyMembershipsTable.sections} ? 'tasks')`)).limit(1);
+   const [member]=await tx.select().from(companyMembershipsTable).where(and(eq(companyMembershipsTable.companyId,req.companyId!),eq(companyMembershipsTable.userId,assignee),sql`(${companyMembershipsTable.role} IN ('owner','admin') OR ${companyMembershipsTable.sections} ? 'tasks')`)).limit(1);
    if(!member)throw new Error('У исполнителя нет доступа к поручениям этой компании.');
-   const raw=req.body?.context;
-   const context=raw&&typeof raw==='object'?{section:String(raw.section??'').slice(0,200),stores:String(raw.stores??'').slice(0,300),period:String(raw.period??'').slice(0,100)}:null;
+   if(context&&!mayReceiveBlock(member,context))throw new Error('У исполнителя нет доступа к поручениям этой компании.');
    const [task]=await tx.insert(companyTasksTable).values({companyId:req.companyId!,createdBy:req.userId!,assigneeUserId:assignee,title,description,...deadline,context}).returning();
    await tx.insert(companyTaskMessagesTable).values({taskId:task.id,authorUserId:req.userId!,body:'Создано поручение',type:'status'});return task;
   }).catch(error=>{if((error as Error).message==='У исполнителя нет доступа к поручениям этой компании.'){res.status(400).json({error:(error as Error).message});return null;}throw error;});
@@ -52,8 +54,9 @@ router.patch('/tasks/:id',async(req,res,next)=>{
    if(action==='delegate'){
     const target=req.body?.assigneeUserId;
     if(!uuid(target)||target===req.userId||target===task.createdBy)return {code:400,error:'Выберите другого исполнителя.'};
-    const [member]=await tx.select({email:usersTable.email}).from(companyMembershipsTable).innerJoin(usersTable,eq(usersTable.id,companyMembershipsTable.userId)).where(and(eq(companyMembershipsTable.companyId,req.companyId!),eq(companyMembershipsTable.userId,target),sql`(${companyMembershipsTable.role} IN ('owner','admin') OR ${companyMembershipsTable.sections} ? 'tasks')`)).limit(1);
+    const [member]=await tx.select({email:usersTable.email,permissions:companyMembershipsTable}).from(companyMembershipsTable).innerJoin(usersTable,eq(usersTable.id,companyMembershipsTable.userId)).where(and(eq(companyMembershipsTable.companyId,req.companyId!),eq(companyMembershipsTable.userId,target),sql`(${companyMembershipsTable.role} IN ('owner','admin') OR ${companyMembershipsTable.sections} ? 'tasks')`)).limit(1);
     if(!member)return {code:400,error:'У исполнителя нет доступа к поручениям этой компании.'};
+    if(task.context&&!mayReceiveBlock(member.permissions,{...task.context,storeIds:task.context.storeIds??[]}))return {code:403,error:'У исполнителя нет доступа к аналитике поручения.'};
     update.assigneeUserId=target;update.delegators=[...new Set([...task.delegators,req.userId!])];system=`Поручение передано: ${member.email}. Первоначальный постановщик сохранён.`;
    }
    if(body)await tx.insert(companyTaskMessagesTable).values({taskId:task.id,authorUserId:req.userId!,body});

@@ -1,424 +1,1517 @@
-import { useEffect, useMemo, useState } from "react";
-import type { FormEvent } from "react";
-import { Link } from "wouter";
 import {
-  Activity, Bot, ChevronDown, ChevronUp, CircleHelp, DollarSign,
-  RefreshCw, Send, ShoppingCart, Package, Wallet, X, Trash2,
-} from "lucide-react";
+  Fragment,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
+import { useSearch } from "wouter";
+import { ArrowUp, ChevronDown, ClipboardPen, Sparkles } from "lucide-react";
 import {
-  Area, AreaChart, Bar, BarChart, CartesianGrid, ResponsiveContainer,
-  Tooltip, XAxis, YAxis,
-} from "recharts";
-import { formatMoney, formatNumber } from "@/lib/format";
-import {
-  formatApiError, getMarketplaceConnections, getMarketplaceDashboard,
-  getOzonFinanceReport, getWildberriesFinanceReport, getSellerExpenses,
-  createSellerExpense, deleteSellerExpense,
+  getMarketplaceStores,
+  type MarketplaceStore,
+  type WildberriesFinanceReport,
+  type SellerExpensesReport,
 } from "@/lib/marketplace-api";
-import type {
-  MarketplaceConnection, MarketplaceDashboard, MarketplaceFilter, MarketplacePeriod,
-  OzonFinanceReport, WildberriesFinanceReport,
-} from "@/lib/marketplace-api";
-import "./dashboard-approved.css";
+import { workspaceRequest as request } from "@/lib/collaboration-api";
+import { getDashboardWindow } from "@/lib/dashboard-api";
+import {
+  completeSum,
+  calendarDays,
+  money,
+  quantity,
+  type BlockContext,
+  type DashboardMetric,
+  type DashboardPoint,
+  type DashboardStore,
+  type DashboardWindow,
+} from "@/lib/dashboard-model";
+import { captureDashboardBlock } from "@/lib/dashboard-snapshot";
+import { useCollaboration } from "@/components/CollaborationProvider";
 import { useAiWorkspace } from "@/components/AiWorkspace";
-
-const PERIODS: Array<{ key: MarketplacePeriod; label: string }> = [
-  { key: "7d", label: "7 дней" },
-  { key: "30d", label: "30 дней" },
-  { key: "90d", label: "90 дней" },
+import DashboardChart, {
+  Change,
+  type ChartSeries,
+} from "@/components/DashboardChart";
+import "./dashboard-prototype.css";
+const platformName = (platform: string) =>
+  platform === "ozon" ? "Ozon" : "ВБ";
+const platformClass = (platform: string) =>
+  platform === "ozon" ? "ozon" : "wb";
+const platformColor = (platform: string) =>
+  platform === "ozon" ? "#157bee" : "#a02edd";
+const keys: DashboardMetric[] = [
+  "views",
+  "carts",
+  "orders",
+  "bought",
+  "orderAmount",
+  "boughtAmount",
 ];
-const DERIVED_FINANCE_ITEMS = [
-  { key: "margin", label: "Маржа", note: "Появится после сопоставления продаж с себестоимостью товаров" },
-  { key: "profitability", label: "Рентабельность", note: "Рассчитывается на основе маржи и выручки" },
-  { key: "cost", label: "Себестоимость проданного", note: "Нужна связь строк финансового отчёта с товарами каталога" },
-  { key: "ads", label: "Реклама", note: "Загрузите рекламный отчёт площадки, чтобы учесть расходы на продвижение" },
+const metricLabels = [
+  ["margin", "Маржа"],
+  ["profitability", "Рентабельность"],
+  ["revenue", "Выручка"],
+  ["expenses", "Расходы"],
+  ["cost", "Себестоимость"],
+  ["ads", "Реклама"],
+  ["extra", "Доп. расходы"],
 ] as const;
-
-function previousFullWeek() {
-  const end = new Date();
-  end.setUTCHours(0, 0, 0, 0);
-  end.setUTCDate(end.getUTCDate() - 1);
-  const start = new Date(end);
-  start.setUTCDate(start.getUTCDate() - 6);
-  return { from: start.toISOString().slice(0, 10), to: end.toISOString().slice(0, 10) };
+type FinanceKey = (typeof metricLabels)[number][0];
+type Finance = Record<FinanceKey, number | null>;
+const blankFinance = (): Finance => ({
+  margin: null,
+  profitability: null,
+  revenue: null,
+  expenses: null,
+  cost: null,
+  ads: null,
+  extra: null,
+});
+function localToday() {
+  return new Date(Date.now() + 5 * 3600000).toISOString().slice(0, 10);
 }
-
-function shortMoney(value: number) {
-  if (Math.abs(value) >= 1_000_000) return `${(value / 1_000_000).toFixed(1)} млн`;
-  if (Math.abs(value) >= 1_000) return `${Math.round(value / 1_000)} тыс.`;
-  return String(Math.round(value));
+function fallbackWindow() {
+  const to = localToday(),
+    from = new Date(Date.parse(to + "T00:00:00Z") - 13 * 86400000)
+      .toISOString()
+      .slice(0, 10);
+  return { from, to, stores: [], partialErrors: [] } as DashboardWindow;
 }
-function dateLabel(value: string) {
-  const date = new Date(`${value}T12:00:00`);
-  return Number.isNaN(date.getTime()) ? value : new Intl.DateTimeFormat("ru-RU", { day: "2-digit", month: "2-digit" }).format(date);
+const dateLabel = (date: string) =>
+  new Date(date + "T12:00:00Z").toLocaleDateString("ru-RU", {
+    day: "2-digit",
+    month: "2-digit",
+  });
+function datesLabel(window: DashboardWindow) {
+  return dateLabel(window.from) + " — " + dateLabel(window.to);
 }
-function marketLabel(id: string) {
-  return id === "ozon" ? "Ozon" : "Wildberries";
+function Market({ platform }: { platform: string }) {
+  return (
+    <span className="market-name">
+      <span className={"market-dot " + platformClass(platform)} />
+      {platformName(platform)}
+    </span>
+  );
 }
-function MarketDot({ marketplace }: { marketplace: string }) {
-  return <span className={`approved-market-dot ${marketplace}`} aria-hidden="true" />;
+function Toggle({
+  open,
+  onClick,
+  label,
+  primary = false,
+}: {
+  open: boolean;
+  onClick: () => void;
+  label: string;
+  primary?: boolean;
+}) {
+  return (
+    <button
+      type="button"
+      className={"toggle " + (primary ? "primary" : "")}
+      aria-expanded={open}
+      aria-label={`${open ? "Свернуть" : "Развернуть"} ${label}`}
+      onClick={onClick}
+    >
+      <span>{open ? "Свернуть" : "Развернуть"}</span>
+      <ChevronDown className="chevron" size={15} />
+    </button>
+  );
 }
-
+function sumMetric(
+  stores: MarketplaceStore[],
+  window: DashboardWindow | undefined,
+  key: DashboardMetric,
+) {
+  return completeSum(
+    stores.map(
+      (store) =>
+        window?.stores.find((s) => s.id === store.id)?.data.totals[key],
+    ),
+  );
+}
+function dayPoints(
+  stores: MarketplaceStore[],
+  window: DashboardWindow | undefined,
+  dates: string[],
+): DashboardPoint[] {
+  return dates.map(
+    (date) =>
+      Object.fromEntries([
+        ["date", date],
+        ...keys.map((key) => [
+          key,
+          completeSum(
+            stores.map(
+              (store) =>
+                window?.stores
+                  .find((s) => s.id === store.id)
+                  ?.data.daily.find((p) => p.date === date)?.[key],
+            ),
+          ),
+        ]),
+      ]) as DashboardPoint,
+  );
+}
+function FinanceValue({
+  value,
+  percent = false,
+}: {
+  value: number | null;
+  percent?: boolean;
+}) {
+  return (
+    <strong>
+      {percent
+        ? value === null
+          ? "Нет данных"
+          : value.toLocaleString("ru-RU", { maximumFractionDigits: 1 }) + "%"
+        : money(value)}
+    </strong>
+  );
+}
+function Summary({
+  stores,
+  window,
+  previous,
+  current,
+  kind,
+}: {
+  stores: MarketplaceStore[];
+  window: DashboardWindow;
+  previous?: DashboardWindow;
+  current?: DashboardWindow;
+  kind: "orders" | "bought";
+}) {
+  const today = current?.to;
+  const daily = dayPoints(
+    stores,
+    current,
+    today
+      ? [
+          today,
+          new Date(Date.parse(today + "T00:00:00Z") - 86400000)
+            .toISOString()
+            .slice(0, 10),
+        ]
+      : [],
+  );
+  return (
+    <div className="commerce-summary">
+      {[
+        [kind, kind === "orders" ? "Заказано" : "Выкуплено"],
+        [kind === "orders" ? "orderAmount" : "boughtAmount", "Сумма"],
+        ["margin", "Маржа"],
+      ].map(([key, label]) => {
+        const metric = key as DashboardMetric,
+          amount = key.includes("Amount") || key === "margin",
+          formatter = amount ? money : quantity;
+        return (
+          <div className="commerce-metric" key={key}>
+            <span className="metric-caption">{label}</span>
+            <div className="metric-periods">
+              <div>
+                <span>2 недели</span>
+                <span>
+                  <strong>
+                    {formatter(sumMetric(stores, window, metric))}
+                  </strong>{" "}
+                  <Change
+                    value={sumMetric(stores, window, metric)}
+                    previous={sumMetric(stores, previous, metric)}
+                  />
+                </span>
+              </div>
+              <div>
+                <span>Сегодня</span>
+                <span>
+                  <strong>{formatter(daily[0]?.[metric] ?? null)}</strong>{" "}
+                  <Change
+                    value={daily[0]?.[metric] ?? null}
+                    previous={daily[1]?.[metric] ?? null}
+                  />
+                </span>
+              </div>
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+function Block({
+  id,
+  title,
+  stores,
+  period,
+  sourceData,
+  toggle,
+  children,
+  small = false,
+  financeCard = false,
+  marketplace,
+  headerUnits,
+  headerSummary,
+}: {
+  id: string;
+  title: string;
+  stores: MarketplaceStore[];
+  period: string;
+  sourceData: unknown;
+  toggle?: ReactNode;
+  children: ReactNode;
+  small?: boolean;
+  financeCard?: boolean;
+  marketplace?: string;
+  headerUnits?: ReactNode;
+  headerSummary?: ReactNode;
+}) {
+  const ref = useRef<HTMLElement>(null),
+    { createTask, canCreate, workspace } = useCollaboration(),
+    ai = useAiWorkspace(),
+    [busy, setBusy] = useState(false),
+    [error, setError] = useState("");
+  const member = workspace?.members.find(
+      (m) => m.userId === workspace.currentUserId,
+    ),
+    finance =
+      workspace?.role === "owner" ||
+      workspace?.role === "admin" ||
+      member?.canSeeFinance;
+  const storeText =
+    stores
+      .map((s) => `${s.storeName} · ${platformName(s.marketplace)}`)
+      .join(", ") || "Нет подключённых магазинов";
+  const context: BlockContext = {
+    section: title,
+    stores: storeText,
+    period,
+    storeIds: stores.map((s) => String(s.id)),
+    reference:
+      "/?" +
+      new URLSearchParams({
+        block: id,
+        store: stores.length === 1 ? String(stores[0].id) : "",
+        platform:
+          stores.length &&
+          stores.every((s) => s.marketplace === stores[0].marketplace)
+            ? stores[0].marketplace
+            : "all",
+      }).toString(),
+  };
+  async function task() {
+    if (!ref.current) return;
+    setError("");
+    setBusy(true);
+    try {
+      const image = await captureDashboardBlock(ref.current);
+      createTask({ ...context, image });
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+  return (
+    <section
+      id={id}
+      ref={ref}
+      className={
+        small
+          ? "store-panel"
+          : financeCard
+            ? "finance-card"
+            : "chart-card aggregate"
+      }
+    >
+      <div
+        className={
+          small
+            ? "store-panel-heading"
+            : financeCard
+              ? "finance-card-head"
+              : marketplace
+                ? "platform-heading"
+                : "chart-heading"
+        }
+      >
+        <div className="chart-title-stack">
+          {small ? (
+            <h4>{title}</h4>
+          ) : financeCard ? (
+            <h3>{title}</h3>
+          ) : marketplace ? (
+            <h3>
+              <Market platform={marketplace} />
+            </h3>
+          ) : (
+            <h2>{title}</h2>
+          )}
+          {headerUnits}
+        </div>
+        {headerSummary && <div className="orders-metrics">{headerSummary}</div>}
+        <div className="task-heading-actions">
+          {toggle}
+          {finance && (
+            <div className="analytics-action-row">
+              {canCreate && (
+                <button
+                  type="button"
+                  className="task-from-analytics"
+                  disabled={busy}
+                  onClick={() => void task()}
+                >
+                  <ClipboardPen size={16} />
+                  <span>Поручить</span>
+                </button>
+              )}
+              {ai.allowed && (
+                <button
+                  type="button"
+                  className="ask-ai-button"
+                  disabled={ai.busy}
+                  onClick={() =>
+                    void ai.openBlock(
+                      JSON.stringify({
+                        ...context,
+                        data: sourceData,
+                        at: new Date().toISOString(),
+                        definitions:
+                          "Пропущенные значения обозначены null. Это отсутствие данных, а не нулевые показатели.",
+                      }),
+                    )
+                  }
+                >
+                  <Sparkles size={16} />
+                  <span>Спросить ИИ</span>
+                </button>
+              )}
+            </div>
+          )}
+        </div>
+      </div>
+      {error && (
+        <p className="task-error" role="alert">
+          {error}
+        </p>
+      )}
+      {children}
+    </section>
+  );
+}
 export default function DashboardPage() {
-  const [period, setPeriod] = useState<MarketplacePeriod>("30d");
-  const [marketplace, setMarketplace] = useState<MarketplaceFilter>("all");
-  const [data, setData] = useState<MarketplaceDashboard | null>(null);
-  const [connections, setConnections] = useState<MarketplaceConnection[]>([]);
-  const [error, setError] = useState("");
-  const [loading, setLoading] = useState(true);
-  const [refreshKey, setRefreshKey] = useState(0);
-  const [ordersOpen, setOrdersOpen] = useState(true);
-  const [funnelOpen, setFunnelOpen] = useState(true);
-  const [financeOpen, setFinanceOpen] = useState(true);
-  const [expandedFinance, setExpandedFinance] = useState<string[]>([]);
-  const [financeLoading, setFinanceLoading] = useState(false);
-  const [financePeriod, setFinancePeriod] = useState(() => previousFullWeek());
-  const [ozonFinance, setOzonFinance] = useState<OzonFinanceReport | null>(null);
-  const [wildberriesFinance, setWildberriesFinance] = useState<WildberriesFinanceReport | null>(null);
-  const [financeErrors, setFinanceErrors] = useState<string[]>([]);
-  const [sellerExpenses, setSellerExpenses] = useState<Awaited<ReturnType<typeof getSellerExpenses>> | null>(null);
-  const [expenseForm, setExpenseForm] = useState({ expenseDate: previousFullWeek().to, category: "Прочее", description: "", amount: "" });
-  const [expenseSaving, setExpenseSaving] = useState(false);
-  const { setAnalytics } = useAiWorkspace();
-  useEffect(() => { setAnalytics(JSON.stringify({ period, marketplace, totals: data ? { revenue: data.revenue, orders: data.orders, units: data.units } : null, recentDailySales: data?.salesSeries.slice(-14) ?? [], dataWarnings: data?.partialErrors ?? [] })); }, [period, marketplace, data, setAnalytics]);
-
+  const search = useSearch(),
+    initial = new URLSearchParams(search);
+  const [platform, setPlatform] = useState(initial.get("platform") ?? "all"),
+    [store, setStore] = useState(
+      initial.get("store") ??
+        localStorage.getItem("navigator-active-store-id") ??
+        "",
+    ),
+    [period, setPeriod] = useState<"current" | "previous">("current");
+  const [stores, setStores] = useState<MarketplaceStore[]>([]),
+    [windows, setWindows] = useState<{
+      current?: DashboardWindow;
+      previous?: DashboardWindow;
+    }>({}),
+    [loading, setLoading] = useState(true),
+    [errors, setErrors] = useState<string[]>([]);
+  const [groups, setGroups] = useState({
+      orders: true,
+      bought: true,
+      funnel: true,
+    }),
+    [collapsed, setCollapsed] = useState<Set<string>>(new Set()),
+    [financeOpen, setFinanceOpen] = useState<Set<string>>(
+      new Set(metricLabels.map((m) => m[0])),
+    ),
+    [units, setUnits] = useState<Record<string, "count" | "money">>({});
+  const [reports, setReports] = useState<
+      Record<number, WildberriesFinanceReport>
+    >({}),
+    [extra, setExtra] = useState<number | null>(null),
+    [financeErrors, setFinanceErrors] = useState<string[]>([]),
+    [topVisible, setTopVisible] = useState(false),
+    [fixed, setFixed] = useState(false),
+    [controlRight, setControlRight] = useState(20);
+  const root = useRef<HTMLDivElement>(null),
+    anchor = useRef<HTMLDivElement>(null),
+    { workspace } = useCollaboration(),
+    ai = useAiWorkspace();
+  const member = workspace?.members.find(
+      (m) => m.userId === workspace.currentUserId,
+    ),
+    canFinance =
+      workspace?.role === "owner" ||
+      workspace?.role === "admin" ||
+      !!member?.canSeeFinance;
+  useEffect(() => {
+    let active = true;
+    void getMarketplaceStores()
+      .then((result) => {
+        if (active) {
+          setStores(result.stores);
+          if (store && !result.stores.some((s) => String(s.id) === store))
+            setStore("");
+        }
+      })
+      .catch((e) => {
+        if (active) setErrors([e.message]);
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
+  useEffect(() => {
+    const params = new URLSearchParams(search);
+    if (params.has("block")) {
+      setPlatform(params.get("platform") ?? "all");
+      setStore(params.get("store") ?? "");
+      setTimeout(
+        () =>
+          document
+            .getElementById(params.get("block") ?? "")
+            ?.scrollIntoView({ block: "start", behavior: "smooth" }),
+        100,
+      );
+    }
+  }, [search]);
+  const available = stores.filter(
+      (s) => platform === "all" || s.marketplace === platform,
+    ),
+    selected = available.filter((s) => !store || String(s.id) === store),
+    platforms = [...new Set(selected.map((s) => s.marketplace))];
+  const companyMonth = localToday().slice(0, 7) + "-01",
+    today = localToday(),
+    chosen = windows[period] ?? fallbackWindow(),
+    previous = period === "current" ? windows.previous : undefined,
+    dates = calendarDays(chosen.from, chosen.to);
   useEffect(() => {
     let active = true;
     setLoading(true);
-    Promise.all([
-      getMarketplaceDashboard(period, marketplace),
-      getMarketplaceConnections(),
-    ]).then(([dashboard, list]) => {
+    setWindows({});
+    void Promise.allSettled([
+      getDashboardWindow("current", platform, store),
+      getDashboardWindow("previous", platform, store),
+    ]).then((results) => {
       if (!active) return;
-      setData(dashboard);
-      setConnections(list);
-      setError("");
-    }).catch((reason) => {
-      if (active) {
-        setData(null);
-        setError(formatApiError(reason));
-      }
-    }).finally(() => { if (active) setLoading(false); });
-    return () => { active = false; };
-  }, [period, marketplace, refreshKey]);
-
+      const next: typeof windows = {},
+        warnings: string[] = [];
+      results.forEach((r, i) => {
+        if (r.status === "fulfilled") {
+          next[i === 0 ? "current" : "previous"] = r.value;
+          warnings.push(...r.value.partialErrors);
+        } else
+          warnings.push(r.reason?.message ?? "Не удалось загрузить данные.");
+      });
+      setWindows(next);
+      setErrors([...new Set(warnings)]);
+      setLoading(false);
+    });
+    return () => {
+      active = false;
+    };
+  }, [platform, store]);
   useEffect(() => {
     let active = true;
-    const connectedMarketplaces = new Set(connections.filter((item) => item.connected).map((item) => item.marketplace));
-    if (!connections.length) return;
-    setFinanceLoading(true);
+    setReports({});
+    setExtra(null);
     setFinanceErrors([]);
-    setOzonFinance(null);
-    setWildberriesFinance(null);
-    const jobs: Array<Promise<void>> = [];
-    if (connectedMarketplaces.has("ozon") && (marketplace === "all" || marketplace === "ozon")) {
-      jobs.push(getOzonFinanceReport(financePeriod.from, financePeriod.to).then((report) => {
-        if (active) setOzonFinance(report);
-      }).catch((error: unknown) => {
-        if (active) setFinanceErrors((current) => [...current, `Ozon: ${formatApiError(error)}`]);
-      }));
-    } else setOzonFinance(null);
-    if (connectedMarketplaces.has("wildberries") && (marketplace === "all" || marketplace === "wildberries")) {
-      jobs.push(getWildberriesFinanceReport(financePeriod.from, financePeriod.to).then((report) => {
-        if (active) setWildberriesFinance(report);
-      }).catch((error: unknown) => {
-        if (active) setFinanceErrors((current) => [...current, `Wildberries: ${formatApiError(error)}`]);
-      }));
-    } else setWildberriesFinance(null);
-    jobs.push(getSellerExpenses(financePeriod.from, financePeriod.to).then((report) => {
-      if (active) setSellerExpenses(report);
-    }).catch((error: unknown) => {
-      if (active) setFinanceErrors((current) => [...current, `Расходы продавца: ${formatApiError(error)}`]);
-    }));
-    void Promise.all(jobs).finally(() => { if (active) setFinanceLoading(false); });
-    return () => { active = false; };
-  }, [connections, financePeriod, marketplace, refreshKey]);
-
-  async function addSellerExpense(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    if (!expenseForm.amount.trim() || expenseSaving) return;
-    setExpenseSaving(true);
-    try {
-      await createSellerExpense(expenseForm);
-      setExpenseForm((current) => ({ ...current, description: "", amount: "" }));
-      setRefreshKey((value) => value + 1);
-    } catch (error) {
-      setFinanceErrors((current) => [...current, `Расход продавца: ${formatApiError(error)}`]);
-    } finally { setExpenseSaving(false); }
-  }
-
-  async function removeSellerExpense(id: string) {
-    try {
-      await deleteSellerExpense(id);
-      setRefreshKey((value) => value + 1);
-    } catch (error) {
-      setFinanceErrors((current) => [...current, `Удаление расхода: ${formatApiError(error)}`]);
+    if (!canFinance || !stores.length) return;
+    const wb = selected.filter((s) => s.marketplace === "wildberries");
+    void Promise.allSettled(
+      wb.map((s) =>
+        request<WildberriesFinanceReport>(
+          "/api/marketplace/finance/wildberries?" +
+            new URLSearchParams({
+              from: companyMonth,
+              to: today,
+              storeId: String(s.id),
+            }),
+        ),
+      ),
+    ).then((result) => {
+      if (!active) return;
+      const next: Record<number, WildberriesFinanceReport> = {},
+        warnings: string[] = [];
+      result.forEach((r, i) => {
+        if (r.status === "fulfilled") next[wb[i].id] = r.value;
+        else warnings.push(wb[i].storeName + ": " + r.reason.message);
+      });
+      setReports(next);
+      setFinanceErrors(warnings);
+    });
+    if (platform === "all" && !store)
+      void request<SellerExpensesReport>(
+        "/api/marketplace/finance/expenses?" +
+          new URLSearchParams({ from: companyMonth, to: today }),
+      )
+        .then((r) => {
+          if (active) setExtra(r.total);
+        })
+        .catch(() => undefined);
+    return () => {
+      active = false;
+    };
+  }, [canFinance, stores, platform, store, companyMonth, today]);
+  const finances = useMemo(
+    () =>
+      Object.fromEntries(
+        selected.map((s) => {
+          const result = blankFinance(),
+            report = reports[s.id];
+          if (report && !report.incomplete) {
+            result.revenue = report.totals.retailAmount;
+            result.expenses = completeSum([
+              report.totals.marketplaceReward,
+              report.totals.delivery,
+              report.totals.storage,
+              report.totals.acceptance,
+              report.totals.penalties,
+              report.totals.deductions,
+              report.totals.acquiring,
+            ]);
+            if (
+              report.catalogCost?.unmatchedUnits === 0 &&
+              (report.soldItems.length > 0 || report.rowsCount === 0)
+            )
+              result.cost = report.catalogCost.costOfGoods;
+          }
+          return [s.id, result];
+        }),
+      ),
+    [reports, selected.map((s) => s.id).join(",")],
+  ) as Record<number, Finance>;
+  const totals = Object.fromEntries(
+    metricLabels.map(([key]) => [
+      key,
+      key === "extra"
+        ? extra
+        : completeSum(selected.map((s) => finances[s.id]?.[key])),
+    ]),
+  ) as Finance;
+  useEffect(() => {
+    ai.setAnalytics(
+      JSON.stringify({
+        section: "Главная (Дашборд)",
+        stores: selected.map((s) => s.storeName).join(", "),
+        period: datesLabel(chosen),
+        data: chosen.stores,
+        finances: canFinance ? totals : undefined,
+        missingValues: "null означает отсутствие данных",
+      }),
+    );
+  }, [windows, period, platform, store, reports, extra, canFinance]);
+  useEffect(() => {
+    const update = () => {
+      const button = anchor.current?.querySelector("button");
+      if (button && !anchor.current?.classList.contains("is-fixed")) {
+        anchor.current?.style.setProperty(
+          "--control-width",
+          button.offsetWidth + "px",
+        );
+        anchor.current?.style.setProperty(
+          "--control-height",
+          button.offsetHeight + "px",
+        );
+      }
+      setTopVisible(window.scrollY > 300);
+      setFixed((anchor.current?.getBoundingClientRect().top ?? 0) < 12);
+      setControlRight(
+        Math.max(
+          12,
+          window.innerWidth -
+            (root.current?.getBoundingClientRect().right ?? window.innerWidth),
+        ),
+      );
+    };
+    window.addEventListener("scroll", update, { passive: true });
+    window.addEventListener("resize", update);
+    const observer = new ResizeObserver(update);
+    if (root.current) observer.observe(root.current);
+    update();
+    return () => {
+      window.removeEventListener("scroll", update);
+      window.removeEventListener("resize", update);
+      observer.disconnect();
+    };
+  }, []);
+  useEffect(() => {
+    let pending = false,
+      lastWidth = 0;
+    const element = root.current;
+    if (!element) return;
+    const fit = () => {
+      pending = false;
+      for (const block of element.querySelectorAll<HTMLElement>(
+        ".metric-periods",
+      )) {
+        if (!block.getClientRects().length) continue;
+        block.style.setProperty("--metric-scale", "1");
+        let scale = 1;
+        for (const row of [...block.children]) {
+          const label = row.firstElementChild as HTMLElement,
+            value = row.lastElementChild as HTMLElement;
+          if (!label || !value) continue;
+          const available = row.clientWidth - 8,
+            needed = label.getBoundingClientRect().width + value.scrollWidth;
+          if (needed > available) scale = Math.min(scale, available / needed);
+        }
+        block.style.setProperty(
+          "--metric-scale",
+          String(Math.max(0.55, Math.min(1, scale - 0.015))),
+        );
+      }
+    };
+    const schedule = () => {
+      if (!pending) {
+        pending = true;
+        queueMicrotask(fit);
+      }
+    };
+    const mutation = new MutationObserver(schedule);
+    mutation.observe(element, { childList: true, subtree: true });
+    const resize = new ResizeObserver((entries) => {
+      const width = entries[0].contentRect.width;
+      if (Math.abs(width - lastWidth) > 0.5) {
+        lastWidth = width;
+        schedule();
+      }
+    });
+    resize.observe(element);
+    schedule();
+    return () => {
+      mutation.disconnect();
+      resize.disconnect();
+    };
+  }, []);
+  const toggleOne = (key: string) =>
+    setCollapsed((current) => {
+      const next = new Set(current);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  const anyExpanded =
+    groups.orders || groups.bought || groups.funnel || financeOpen.size > 0;
+  function toggleAll() {
+    const next = !anyExpanded;
+    let destination: string | undefined;
+    if (!next && fixed) {
+      const block = [
+        ...root.current!.querySelectorAll<HTMLElement>(":scope > section"),
+      ].find((el) => el.getBoundingClientRect().bottom > 96);
+      destination = block?.dataset.primary ?? block?.id;
     }
+    setGroups({ orders: next, bought: next, funnel: next });
+    setCollapsed(new Set());
+    setFinanceOpen(new Set(next ? metricLabels.map((m) => m[0]) : []));
+    if (destination)
+      requestAnimationFrame(() =>
+        document
+          .getElementById(destination!)
+          ?.scrollIntoView({ block: "start" }),
+      );
   }
-
-  const series = useMemo(() => (data?.salesSeries ?? []).slice(-14).map((item) => ({
-    ...item,
-    label: dateLabel(item.date),
-  })), [data]);
-  const connected = connections.filter((item) => item.connected);
-  const revenueByMarket = useMemo(() => ({
-    ozon: series.reduce((sum, day) => sum + day.ozonRevenue, 0),
-    wildberries: series.reduce((sum, day) => sum + day.wildberriesRevenue, 0),
-  }), [series]);
-  const orderBars = useMemo(() => (data?.funnels ?? []).map((item) => ({
-    name: item.marketplace === "ozon" ? "Ozon · ед. заказано" : marketLabel(item.marketplace),
-    marketplace: item.marketplace,
-    orders: item.orders,
-  })), [data]);
-  const kpis = [
-    { label: "Выручка", value: formatMoney(data?.revenue ?? 0), icon: DollarSign },
-    { label: "Заказы", value: formatNumber(data?.orders ?? 0), icon: ShoppingCart },
-    { label: "Проданные единицы", value: formatNumber(data?.units ?? 0), icon: Package },
-    { label: "Средний чек", value: data && data.averageOrderValue > 0 ? formatMoney(data.averageOrderValue) : "—", icon: Wallet },
-  ];
-  const wbCost = wildberriesFinance?.catalogCost;
-  const ozonCost = ozonFinance?.catalogCost;
-  const wbCostComplete = Boolean(wildberriesFinance && wbCost && wildberriesFinance.soldItems.length > 0 && wbCost.unmatchedUnits === 0);
-  const wbMargin = wbCostComplete && wildberriesFinance && wbCost
-    ? wildberriesFinance.totals.sellerPayout - wbCost.costOfGoods
-    : null;
-  const ozonCostComplete = Boolean(ozonFinance && ozonCost && ozonFinance.soldItems.length > 0 && ozonCost.unmatchedUnits === 0);
-  const ozonMargin = ozonCostComplete && ozonFinance && ozonCost
-    ? ozonFinance.totals.accrued - ozonCost.costOfGoods
-    : null;
-  const totalMargin = wbMargin !== null || ozonMargin !== null
-    ? (wbMargin ?? 0) + (ozonMargin ?? 0)
-    : null;
-  const payoutForMargin = (wbMargin !== null ? wildberriesFinance?.totals.sellerPayout ?? 0 : 0)
-    + (ozonMargin !== null ? ozonFinance?.totals.accrued ?? 0 : 0);
-  const manuallyTrackedAds = sellerExpenses?.expenses
-    .filter((expense) => ["реклама", "продвижение", "ads"].includes(expense.category.trim().toLocaleLowerCase("ru-RU")))
-    .reduce((sum, expense) => sum + Number(expense.amount), 0);
-
-  function toggleFinance(key: string) {
-    setExpandedFinance((current) => current.includes(key) ? current.filter((item) => item !== key) : [...current, key]);
+  const unitControls = (id: string) => (
+    <div className="chart-unit-bar">
+      <div
+        className="chart-unit-switch"
+        role="group"
+        aria-label={"Единицы графика " + id}
+      >
+        {(
+          [
+            ["count", "Штуки"],
+            ["money", "Сумма, ₽"],
+          ] as const
+        ).map(([key, label]) => (
+          <button
+            key={key}
+            type="button"
+            aria-pressed={(units[id] ?? "count") === key}
+            onClick={() => setUnits((u) => ({ ...u, [id]: key }))}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+  function chart(
+    kind: "orders" | "bought" | "funnel",
+    own: MarketplaceStore[],
+    id: string,
+    aggregate: boolean,
+  ) {
+    const currentPoints = dayPoints(own, chosen, dates),
+      previousDates = previous
+        ? calendarDays(previous.from, previous.to)
+        : dates,
+      previousPoints = dayPoints(own, previous, previousDates),
+      unit = units[id] ?? "count",
+      label =
+        kind === "funnel"
+          ? "Воронка продаж"
+          : kind === "orders"
+            ? "Заказы"
+            : "Выкупы";
+    const metrics: DashboardMetric[] =
+      kind === "funnel"
+        ? ["views", "carts", "orders", "bought"]
+        : [
+            unit === "money"
+              ? kind === "orders"
+                ? "orderAmount"
+                : "boughtAmount"
+              : kind,
+          ];
+    const colors = ["#d63dd0", "#8651d0", "#16a59c", "#4184d4"];
+    const series: ChartSeries[] = metrics.flatMap((key, i) => [
+      {
+        key,
+        label: key,
+        color:
+          kind === "funnel"
+            ? colors[i]
+            : aggregate
+              ? "#2f7a6a"
+              : platformColor(own[0]?.marketplace ?? ""),
+        values: currentPoints.map((p) => p[key]),
+        dash:
+          kind === "funnel"
+            ? i === 1
+              ? "9 3"
+              : i === 3
+                ? "3 3"
+                : undefined
+            : undefined,
+      },
+      {
+        key,
+        label: "Предыдущий период",
+        color: "#9baaa6",
+        previous: true,
+        values: previousPoints.map((p) => p[key]),
+      },
+    ]);
+    return (
+      <DashboardChart
+        title={label}
+        dates={dates}
+        series={
+          kind === "funnel" && aggregate
+            ? series.filter((s) => !s.previous)
+            : series
+        }
+        current={currentPoints}
+        previous={previousPoints}
+        unit={kind === "funnel" ? "count" : unit}
+        bar={aggregate && kind !== "funnel"}
+      />
+    );
   }
-
-  return (
-    <div className="approved-dashboard chat-collapsed">
-      <div className="approved-main">
-        <header className="approved-header">
-          <div>
-            <div className="approved-title-row">
-              <h1>Главная <span>(Дашборд)</span></h1>
-              <span className="approved-demo-tag">Интерфейс в разработке</span>
-            </div>
-            <p>Единая картина продаж по подключённым маркетплейсам</p>
-          </div>
-          <div className="approved-toolbar">
-            <label className="approved-filter">
-              <span>Период</span>
-              <select value={period} onChange={(event) => setPeriod(event.target.value as MarketplacePeriod)}>
-                {PERIODS.map((item) => <option value={item.key} key={item.key}>{item.label}</option>)}
-              </select>
-            </label>
-            <label className="approved-filter">
-              <span>Площадки</span>
-              <select value={marketplace} onChange={(event) => setMarketplace(event.target.value as MarketplaceFilter)}>
-                <option value="all">Все площадки</option>
-                <option value="wildberries">Wildberries</option>
-                <option value="ozon">Ozon</option>
-              </select>
-            </label>
-            <button className="approved-button" onClick={() => setRefreshKey((value) => value + 1)} disabled={loading}>
-              <RefreshCw size={15} className={loading ? "approved-spin" : ""} /> Обновить
-            </button>
-            <button className="approved-button approved-button-primary" onClick={() => setOrdersOpen((value) => !value)}>
-              {ordersOpen ? "Свернуть блоки" : "Развернуть блоки"}
-            </button>
-          </div>
-          <div className="approved-market-legend">
-            <span><MarketDot marketplace="wildberries" /> Wildberries</span>
-            <span><MarketDot marketplace="ozon" /> Ozon</span>
-            <span className="approved-connection-count">Ключи сохранены: {connected.length} из 2</span>
-          </div>
-        </header>
-
-        {error && <div className="approved-alert" role="alert">{error} <Link href="/settings">Открыть настройки API</Link></div>}
-        {data?.partialErrors.map((item) => <div className="approved-alert approved-alert-muted" role="status" key={item}>{item}</div>)}
-
-        <section className="approved-kpis" aria-label="Основные показатели">
-          {kpis.map((item) => {
-            const Icon = item.icon;
-            return <article className="approved-kpi" key={item.label}>
-              <div><span>{item.label}</span><strong>{loading ? "…" : item.value}</strong></div>
-              <i><Icon size={19} /></i>
-            </article>;
-          })}
-        </section>
-
-        <section className="approved-panel">
-          <div className="approved-panel-heading">
-            <div><h2>Динамика выручки</h2><p>Ежедневные данные API · последние 14 точек выбранного периода</p></div>
-            <span className="approved-source-tag">Данные API</span>
-          </div>
-          {series.length ? <div className="approved-chart">
-            <ResponsiveContainer width="100%" height={250}>
-              <AreaChart data={series} margin={{ top: 10, right: 12, left: 0, bottom: 0 }}>
-                <defs>
-                  <linearGradient id="approved-wb-fill" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor="#a02edd" stopOpacity={0.22} /><stop offset="100%" stopColor="#a02edd" stopOpacity={0.02} /></linearGradient>
-                  <linearGradient id="approved-ozon-fill" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor="#157bee" stopOpacity={0.18} /><stop offset="100%" stopColor="#157bee" stopOpacity={0.01} /></linearGradient>
-                </defs>
-                <CartesianGrid stroke="#e8efeb" strokeDasharray="4 5" vertical={false} />
-                <XAxis dataKey="label" tickLine={false} axisLine={false} tick={{ fill: "#73827b", fontSize: 11 }} minTickGap={18} />
-                <YAxis tickFormatter={(value) => shortMoney(Number(value))} tickLine={false} axisLine={false} width={55} tick={{ fill: "#73827b", fontSize: 11 }} />
-                <Tooltip formatter={(value) => formatMoney(Number(value))} labelStyle={{ color: "#20372f" }} />
-                {(marketplace === "all" || marketplace === "wildberries") && <Area type="monotone" dataKey="wildberriesRevenue" name="Wildberries" stroke="#a02edd" strokeWidth={2.4} fill="url(#approved-wb-fill)" />}
-                {(marketplace === "all" || marketplace === "ozon") && <Area type="monotone" dataKey="ozonRevenue" name="Ozon" stroke="#157bee" strokeWidth={2.4} fill="url(#approved-ozon-fill)" />}
-              </AreaChart>
-            </ResponsiveContainer>
-          </div> : <div className="approved-empty">{loading ? "Загружаем данные…" : "Пока нет данных. Подключите Wildberries или Ozon в настройках."}</div>}
-        </section>
-
-        <section className="approved-section">
-          <div className="approved-section-heading">
-            <div><h2>Заказы по площадкам</h2><p>Суммарные значения за выбранный период</p></div>
-            <button className="approved-collapse" onClick={() => setOrdersOpen((value) => !value)} aria-expanded={ordersOpen}>{ordersOpen ? <ChevronUp size={16} /> : <ChevronDown size={16} />} {ordersOpen ? "Свернуть" : "Развернуть"}</button>
-          </div>
-          {ordersOpen && <div className="approved-panel">
-            {orderBars.length ? <ResponsiveContainer width="100%" height={170}>
-              <BarChart data={orderBars} margin={{ top: 12, right: 18, left: 4, bottom: 0 }}>
-                <CartesianGrid stroke="#e8efeb" strokeDasharray="4 5" vertical={false} />
-                <XAxis dataKey="name" tickLine={false} axisLine={false} />
-                <YAxis tickFormatter={(value) => formatNumber(Number(value))} tickLine={false} axisLine={false} width={48} />
-                <Tooltip formatter={(value, _name, item) => [formatNumber(Number(value)), item.payload.marketplace === "ozon" ? "Заказано, шт." : "Заказы"]} />
-                <Bar dataKey="orders" name="Заказы / единицы" radius={[6, 6, 0, 0]} fill="#2f7a6a" />
-              </BarChart>
-            </ResponsiveContainer> : <div className="approved-empty">Нет достоверной разбивки заказов по площадкам за выбранный период.</div>}
-            <p className="approved-footnote">WB показывает число заказов; Ozon — заказанные единицы товара. Значения подписаны отдельно, чтобы не смешивать заказы и штуки.</p>
-          </div>}
-        </section>
-
-        <section className="approved-panel">
-          <div className="approved-panel-heading">
-            <div><h2>Воронка продаж</h2><p>Доступные агрегированные метрики маркетплейсов</p></div>
-            <span className="approved-source-tag">Частично доступно</span>
-          </div>
-          {data?.funnels.length ? <div className="approved-funnel-grid">
-            {data.funnels.map((funnel) => <article className="approved-funnel-card" key={funnel.marketplace}>
-              <h3><MarketDot marketplace={funnel.marketplace} />{marketLabel(funnel.marketplace)}</h3>
-              <div className="approved-funnel-stages">
-                <div><span>Просмотры</span><strong>{formatNumber(funnel.views)}</strong></div>
-                <div><span>Корзины</span><strong>{formatNumber(funnel.cartAdds)}</strong><small>{funnel.viewToCartPercent.toFixed(1)}%</small></div>
-                <div><span>{funnel.marketplace === "ozon" ? "Заказано, шт." : "Заказы"}</span><strong>{formatNumber(funnel.orders)}</strong><small>{funnel.cartToOrderPercent.toFixed(1)}%</small></div>
-                <div><span>{funnel.marketplace === "ozon" ? "Выкуплено · нет данных" : "Выкуплено"}</span><strong>{funnel.marketplace === "ozon" ? "—" : formatNumber(funnel.purchases)}</strong>{funnel.marketplace !== "ozon" && <small>{funnel.orderToPurchasePercent.toFixed(1)}%</small>}</div>
+  function funnelMetrics(own: MarketplaceStore[]) {
+    const currentDay = windows.current?.to ?? today,
+      yesterday = new Date(Date.parse(currentDay + "T00:00:00Z") - 86400000)
+        .toISOString()
+        .slice(0, 10),
+      points = dayPoints(own, windows.current, [currentDay, yesterday]);
+    return (
+      <div className="platform-funnel-legend">
+        {(
+          [
+            ["views", "Переходы"],
+            ["carts", "Корзина"],
+            ["orders", "Заказали"],
+            ["bought", "Выкупили"],
+          ] as const
+        ).map(([key, label]) => (
+          <span className="legend-item" key={key}>
+            <span className={"stage-dot " + key} />
+            {label}
+            <div className="metric-periods">
+              <div>
+                <span>2 недели</span>
+                <span>
+                  <strong>{quantity(sumMetric(own, chosen, key))}</strong>{" "}
+                  <Change
+                    value={sumMetric(own, chosen, key)}
+                    previous={sumMetric(own, previous, key)}
+                  />
+                </span>
               </div>
-            </article>)}
-          </div> : <div className="approved-empty">Для выбранных площадок API пока не вернуло полный набор этапов воронки.</div>}
-          <p className="approved-footnote">Показатели отображаются только там, где источник API предоставляет соответствующие метрики.</p>
-        </section>
-
-        <section className="approved-section">
-          <div className="approved-section-heading">
-            <div><h2>Сводка по финансам</h2><p>Финансовые отчёты за {dateLabel(financePeriod.from)}–{dateLabel(financePeriod.to)} · предыдущие 7 полных дней</p></div>
-            <button className="approved-collapse" onClick={() => setFinanceOpen((value) => !value)} aria-expanded={financeOpen}>{financeOpen ? <ChevronUp size={16} /> : <ChevronDown size={16} />} {financeOpen ? "Свернуть" : "Развернуть"}</button>
-          </div>
-          {financeOpen && <>
-            {financeErrors.map((item) => <div className="approved-alert approved-alert-muted" role="status" key={item}>{item}</div>)}
-            <div className="approved-finance-grid">
-              {ozonFinance && <article className="approved-finance-card approved-finance-report">
-                <div className="approved-finance-head"><h3><MarketDot marketplace="ozon" /> Ozon · начисления</h3><span>{financeLoading ? "Обновляем…" : `${ozonFinance.totals.accrualsCount} операций`}</span></div>
-                <strong>{financeLoading ? "…" : formatMoney(ozonFinance.totals.accrued)}</strong>
-                <div className="approved-finance-rows">
-                  {[ ["Проводки", ozonFinance.totals.posting], ["Товарные операции", ozonFinance.totals.item], ["Нетоварные операции", ozonFinance.totals.nonItem], ["Контейнерные сборы", ozonFinance.totals.containerFees], ["Прочее", ozonFinance.totals.other] ].map(([label, amount]) => <div key={String(label)}><span>{label}</span><b>{formatMoney(Number(amount))}</b></div>)}
-                </div>
-                {ozonFinance.totals.missingAmountRows > 0 && <p>{ozonFinance.totals.missingAmountRows} операций без суммы пропущено.</p>}
-                {ozonFinance.catalogCost && <p>{ozonFinance.soldItems.length === 0
-                  ? ozonFinance.productSalesError ?? "В отчёте Ozon не найдены товары по SKU за выбранный период."
-                  : `${ozonFinance.productSalesMetric === "ordered_units" ? "Заказано по SKU" : "Товарных строк"}: ${ozonFinance.soldItems.length}; сопоставлено ${formatNumber(ozonFinance.catalogCost.matchedUnits)} шт.; без пары в каталоге ${formatNumber(ozonFinance.catalogCost.unmatchedUnits)} шт.${ozonFinance.productSalesMetric === "ordered_units" ? " Себестоимость заказанного — ориентир, не подтверждённая себестоимость выкупленных товаров." : ""}`}</p>}
-              </article>}
-              {wildberriesFinance && <article className="approved-finance-card approved-finance-report">
-                <div className="approved-finance-head"><h3><MarketDot marketplace="wildberries" /> Wildberries · отчёт реализации</h3><span>{financeLoading ? "Обновляем…" : `${wildberriesFinance.rowsCount} строк`}</span></div>
-                <strong>{financeLoading ? "…" : formatMoney(wildberriesFinance.totals.retailAmount)}</strong>
-                <div className="approved-finance-rows">
-                  {[ ["К выплате продавцу", wildberriesFinance.totals.sellerPayout], ["Вознаграждение WB", wildberriesFinance.totals.marketplaceReward], ["Логистика", wildberriesFinance.totals.delivery], ["Хранение", wildberriesFinance.totals.storage], ["Приёмка", wildberriesFinance.totals.acceptance], ["Штрафы", wildberriesFinance.totals.penalties], ["Удержания", wildberriesFinance.totals.deductions], ["Эквайринг", wildberriesFinance.totals.acquiring], ["Доп. выплаты", wildberriesFinance.totals.additionalPayments] ].map(([label, amount]) => <div key={String(label)}><span>{label}</span><b>{formatMoney(Number(amount))}</b></div>)}
-                </div>
-                {wildberriesFinance.incomplete && <p>Выведена только часть отчёта. Уточните период выгрузки.</p>}
-              </article>}
-              {!financeLoading && !ozonFinance && !wildberriesFinance && !financeErrors.length && <div className="approved-empty">Подключите площадку с доступом к финансовым отчётам.</div>}
-              {DERIVED_FINANCE_ITEMS.map((item) => {
-                const value = item.key === "cost" && ((wbCost && wildberriesFinance?.soldItems.length) || (ozonCost && ozonFinance?.soldItems.length))
-                  ? formatMoney((wbCost?.costOfGoods ?? 0) + (ozonCost?.costOfGoods ?? 0))
-                  : item.key === "ads" && manuallyTrackedAds !== undefined
-                    ? formatMoney(manuallyTrackedAds)
-                  : item.key === "margin" && totalMargin !== null
-                    ? formatMoney(totalMargin)
-                    : item.key === "profitability" && totalMargin !== null && payoutForMargin !== 0
-                      ? `${((totalMargin / payoutForMargin) * 100).toFixed(1)}%`
-                      : "—";
-                const note = item.key === "cost" && (wildberriesFinance || ozonFinance)
-                  ? `WB сопоставлено ${formatNumber(wbCost?.matchedUnits ?? 0)} шт., без пары ${formatNumber(wbCost?.unmatchedUnits ?? 0)} шт.; Ozon сопоставлено ${formatNumber(ozonCost?.matchedUnits ?? 0)} шт., без пары ${formatNumber(ozonCost?.unmatchedUnits ?? 0)} шт.${ozonFinance && ozonFinance.soldItems.length === 0 ? " Ozon не вернул товарные строки с артикулами/SKU и количеством." : ""}`
-                  : item.key === "ads" && manuallyTrackedAds !== undefined
-                    ? "Сумма из расходов продавца с категорией «Реклама» или «Продвижение». Добавляйте рекламные траты в форме ниже."
-                  : item.key === "margin" && totalMargin !== null
-                    ? ozonFinance?.productSalesMetric === "ordered_units"
-                      ? "Предварительно: начисления Ozon минус себестоимость заказанных единиц по SKU. Это оценка, не подтверждённая прибыль по выкупам; фактические возвраты и отмены могут изменить результат."
-                      : "WB: выплата продавцу минус себестоимость; Ozon: начисления за вычетом сопоставленной себестоимости. Учтены только товары с полным сопоставлением."
-                  : item.key === "profitability" && totalMargin !== null
-                      ? ozonFinance?.productSalesMetric === "ordered_units"
-                        ? "Предварительная маржа разделена на начисления Ozon; расчёт станет фактическим, когда будут доступны выкупы и возвраты по SKU."
-                        : "Маржа разделена на сумму выплат и начислений по площадкам, где удалось полностью сопоставить товары."
-                      : item.note;
-                return <article className="approved-finance-card" key={item.key}>
-                  <div className="approved-finance-head"><h3>{item.label}</h3><button aria-label={`Подробнее: ${item.label}`} onClick={() => toggleFinance(item.key)}>{expandedFinance.includes(item.key) ? <ChevronUp size={15} /> : <ChevronDown size={15} />}</button></div>
-                  <strong className={value === "—" ? "" : "approved-finance-value"}>{value}</strong>
-                  {expandedFinance.includes(item.key) && <p>{note}</p>}
-                </article>;
-              })}
-              <article className="approved-finance-card approved-expenses-card">
-                <div className="approved-finance-head"><h3>Дополнительные расходы продавца</h3><span>{sellerExpenses ? `${sellerExpenses.expenses.length} записей` : ""}</span></div>
-                <strong>{sellerExpenses ? formatMoney(sellerExpenses.total) : financeLoading ? "…" : "0 ₽"}</strong>
-                <form className="approved-expense-form" onSubmit={addSellerExpense}>
-                  <label>Дата<input type="date" value={expenseForm.expenseDate} onChange={(event) => setExpenseForm((current) => ({ ...current, expenseDate: event.target.value }))} required /></label>
-                  <label>Категория<input value={expenseForm.category} onChange={(event) => setExpenseForm((current) => ({ ...current, category: event.target.value }))} maxLength={80} placeholder="Например, упаковка" required /></label>
-                  <label>Описание<input value={expenseForm.description} onChange={(event) => setExpenseForm((current) => ({ ...current, description: event.target.value }))} maxLength={300} placeholder="Необязательно" /></label>
-                  <label>Сумма, ₽<input inputMode="decimal" value={expenseForm.amount} onChange={(event) => setExpenseForm((current) => ({ ...current, amount: event.target.value }))} placeholder="0,00" required /></label>
-                  <button type="submit" disabled={expenseSaving || !expenseForm.amount.trim()}>{expenseSaving ? "Сохраняем…" : "Добавить расход"}</button>
-                </form>
-                {!!sellerExpenses?.expenses.length && <div className="approved-expense-list">
-                  {sellerExpenses.expenses.map((expense) => <div key={expense.id}>
-                    <span><b>{expense.category}</b>{expense.description && ` · ${expense.description}`}<small>{dateLabel(expense.expenseDate)}</small></span>
-                    <strong>{formatMoney(Number(expense.amount))}</strong>
-                    <button type="button" aria-label={`Удалить расход ${expense.category}`} title="Удалить расход" onClick={() => void removeSellerExpense(expense.id)}><Trash2 size={14} /></button>
-                  </div>)}
-                </div>}
-                <p>Сумма показана за выбранные 7 дней. Эти расходы будут вычитаться при расчёте прибыли.</p>
-              </article>
+              <div>
+                <span>Сегодня</span>
+                <span>
+                  <strong>
+                    {quantity(
+                      dayPoints(own, windows.current, [
+                        windows.current?.to ?? today,
+                      ])[0][key],
+                    )}
+                  </strong>
+                  <Change value={points[0][key]} previous={points[1][key]} />
+                </span>
+              </div>
             </div>
-          </>}
-          <p className="approved-footnote">Показаны суммы из отчётов площадок; категории Ozon и WB различаются и не складываются в общие расходы. Себестоимость и маржа появятся после сопоставления строк продаж с товарами каталога. Реклама учитывается по отдельному отчёту площадки.</p>
-        </section>
-
-        <section className="approved-section">
-          <div className="approved-section-heading">
-            <div><h2>По магазинам</h2><p>Подключённые кабинеты и фактическая выручка</p></div>
-            <Link href="/marketplaces" className="approved-text-link">Управление площадками →</Link>
+          </span>
+        ))}
+      </div>
+    );
+  }
+  const contextData = (own: MarketplaceStore[]) => ({
+    from: chosen.from,
+    to: chosen.to,
+    stores: chosen.stores.filter((s) => own.some((o) => o.id === s.id)),
+  });
+  return (
+    <div
+      id="dashboard-view"
+      className="prototype-dashboard"
+      ref={root}
+      tabIndex={-1}
+      style={
+        {
+          "--dashboard-control-right": controlRight + "px",
+        } as React.CSSProperties
+      }
+    >
+      <header className="page-header">
+        <div className="page-title">
+          <h1>
+            Главная <span>(Дашборд)</span>
+          </h1>
+        </div>
+        <div className="toolbar">
+          <div className="filters">
+            <label className="filter">
+              <span>Период графиков</span>
+              <select
+                value={period}
+                onChange={(e) => setPeriod(e.target.value as typeof period)}
+              >
+                <option value="current">
+                  {datesLabel(windows.current ?? fallbackWindow())}
+                </option>
+                <option value="previous">
+                  {windows.previous
+                    ? datesLabel(windows.previous)
+                    : "Предыдущие 2 недели"}
+                </option>
+              </select>
+            </label>
+            <label className="filter">
+              <span>Площадки</span>
+              <select
+                value={platform}
+                onChange={(e) => {
+                  setPlatform(e.target.value);
+                  setStore("");
+                  localStorage.removeItem("navigator-active-store-id");
+                  window.dispatchEvent(new Event("dashboard-store-changed"));
+                }}
+              >
+                <option value="all">Все площадки</option>
+                {[...new Set(stores.map((s) => s.marketplace))].map((p) => (
+                  <option key={p} value={p}>
+                    {platformName(p)}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="filter">
+              <span>Магазины</span>
+              <select
+                value={store}
+                onChange={(e) => {
+                  setStore(e.target.value);
+                  if (e.target.value)
+                    localStorage.setItem(
+                      "navigator-active-store-id",
+                      e.target.value,
+                    );
+                  else localStorage.removeItem("navigator-active-store-id");
+                  window.dispatchEvent(new Event("dashboard-store-changed"));
+                }}
+              >
+                <option value="">Все магазины</option>
+                {available.map((s) => (
+                  <option key={s.id} value={s.id}>
+                    {platformName(s.marketplace)} · {s.storeName}
+                  </option>
+                ))}
+              </select>
+            </label>
           </div>
-          <div className="approved-stores">
-            {connections.map((connection) => {
-              const amount = revenueByMarket[connection.marketplace];
-              const analyticsRateLimited = Boolean(connection.storeName && data?.partialErrors.some((message) =>
-                message.startsWith(`${connection.storeName}:`) && /429|ограничил запросы/i.test(message),
-              ));
-              return <article className="approved-store-card" key={connection.marketplace}>
-                <div className="approved-store-title"><MarketDot marketplace={connection.marketplace} /><div><h3>{connection.storeName || marketLabel(connection.marketplace)}</h3><span>{marketLabel(connection.marketplace)}</span></div><span className={`approved-status ${analyticsRateLimited ? "rate-limited" : connection.connected ? "connected" : ""}`}>{analyticsRateLimited ? "Лимит аналитики" : connection.connected ? "Ключ сохранён" : "Не подключено"}</span></div>
-                <div className="approved-store-revenue"><span>Выручка за выбранный отрезок графика</span><strong>{connection.connected ? formatMoney(amount) : "—"}</strong></div>
-                <div className="approved-store-bottom"><span>Последняя синхронизация</span><span>{connection.lastSyncAt ? new Date(connection.lastSyncAt).toLocaleString("ru-RU") : "Нет данных"}</span></div>
-                {!connection.connected && <Link href="/settings" className="approved-text-link">Подключить API →</Link>}
-              </article>;
+          <div
+            ref={anchor}
+            className={"global-toggle-anchor " + (fixed ? "is-fixed" : "")}
+          >
+            <button
+              id="global-toggle"
+              type="button"
+              className="toggle primary"
+              onClick={toggleAll}
+              aria-expanded={anyExpanded}
+            >
+              {anyExpanded ? "Свернуть всё" : "Развернуть всё"}
+              <ChevronDown className="chevron" size={15} />
+            </button>
+          </div>
+        </div>
+        <div className="marketplace-key">
+          {platforms.map((p) => (
+            <Market key={p} platform={p} />
+          ))}
+        </div>
+        {loading && (
+          <p role="status">Загружаем данные подключённых магазинов…</p>
+        )}
+        {errors.map((error) => (
+          <p className="dashboard-warning" role="status" key={error}>
+            {error}
+          </p>
+        ))}
+      </header>
+      {!loading && !stores.length && (
+        <div className="acc-empty">
+          <h3>Начнём с магазина</h3>
+          <p>Подключите магазин или попросите владельца открыть доступ.</p>
+          <a href="/settings">Магазины и подключения →</a>
+        </div>
+      )}
+      {(["orders", "bought"] as const).map((kind) => (
+        <Fragment key={kind}>
+          <Block
+            id={kind + "-chart"}
+            title={kind === "orders" ? "Заказы" : "Выкупы"}
+            stores={selected}
+            period={datesLabel(chosen)}
+            sourceData={contextData(selected)}
+            headerUnits={unitControls(kind + "-total")}
+            headerSummary={
+              <Summary
+                stores={selected}
+                window={chosen}
+                previous={previous}
+                current={windows.current}
+                kind={kind}
+              />
+            }
+          >
+            {chart(kind, selected, kind + "-total", true)}
+          </Block>
+          <section className="breakdown-section" data-primary={kind + "-chart"}>
+            <div className="section-heading">
+              <h2>{kind === "orders" ? "Заказы" : "Выкупы"} по площадкам</h2>
+              <Toggle
+                open={groups[kind]}
+                primary
+                label={
+                  "графики " +
+                  (kind === "orders" ? "заказов" : "выкупов") +
+                  " по площадкам"
+                }
+                onClick={() => {
+                  setGroups((g) => ({ ...g, [kind]: !g[kind] }));
+                  setCollapsed(
+                    (c) =>
+                      new Set([...c].filter((key) => !key.startsWith(kind))),
+                  );
+                }}
+              />
+            </div>
+            {groups[kind] && (
+              <div className="platform-charts">
+                {platforms.map((p) => {
+                  const own = selected.filter((s) => s.marketplace === p),
+                    id = kind + "-" + p,
+                    open = !collapsed.has(id);
+                  return (
+                    <Block
+                      key={p}
+                      id={id}
+                      title={
+                        (kind === "orders" ? "Заказы" : "Выкупы") +
+                        " · " +
+                        platformName(p)
+                      }
+                      stores={own}
+                      period={datesLabel(chosen)}
+                      sourceData={contextData(own)}
+                      marketplace={p}
+                      headerUnits={unitControls(id)}
+                      toggle={
+                        <Toggle
+                          open={open}
+                          label={
+                            (kind === "orders" ? "заказы" : "выкупы") +
+                            " " +
+                            platformName(p)
+                          }
+                          onClick={() => toggleOne(id)}
+                        />
+                      }
+                    >
+                      <div className="platform-commerce">
+                        <Summary
+                          stores={own}
+                          window={chosen}
+                          previous={previous}
+                          current={windows.current}
+                          kind={kind}
+                        />
+                      </div>
+                      {open && (
+                        <>
+                          <div className="comparison-legend">
+                            <span className="legend-item">
+                              <span
+                                className={"legend-line " + platformClass(p)}
+                              />
+                              Текущий период
+                            </span>
+                            <span className="legend-item">
+                              <span className="legend-line previous" />
+                              Предыдущий период
+                            </span>
+                          </div>
+                          {chart(kind, own, id, false)}
+                        </>
+                      )}
+                    </Block>
+                  );
+                })}
+              </div>
+            )}
+          </section>
+        </Fragment>
+      ))}
+      <Block
+        id="funnel-chart"
+        title="Воронка продаж"
+        stores={selected}
+        period={datesLabel(chosen)}
+        sourceData={contextData(selected)}
+      >
+        {funnelMetrics(selected)}
+        {chart("funnel", selected, "funnel-total", true)}
+      </Block>
+      <section className="breakdown-section" data-primary="funnel-chart">
+        <div className="section-heading">
+          <h2>Воронки по площадкам</h2>
+          <Toggle
+            primary
+            open={groups.funnel}
+            label="воронки по площадкам"
+            onClick={() => {
+              setGroups((g) => ({ ...g, funnel: !g.funnel }));
+              setCollapsed(
+                (c) =>
+                  new Set([...c].filter((key) => !key.startsWith("funnel"))),
+              );
+            }}
+          />
+        </div>
+        {groups.funnel && (
+          <div className="platform-charts">
+            {platforms.map((p) => {
+              const own = selected.filter((s) => s.marketplace === p),
+                id = "funnel-" + p,
+                open = !collapsed.has(id);
+              return (
+                <Block
+                  id={id}
+                  key={p}
+                  title={"Воронка продаж · " + platformName(p)}
+                  stores={own}
+                  period={datesLabel(chosen)}
+                  sourceData={contextData(own)}
+                  marketplace={p}
+                  toggle={
+                    <Toggle
+                      open={open}
+                      label={"воронку " + platformName(p)}
+                      onClick={() => toggleOne(id)}
+                    />
+                  }
+                >
+                  {open && (
+                    <>
+                      {funnelMetrics(own)}
+                      {chart("funnel", own, id, false)}
+                      <p className="platform-comparison">
+                        Цветные линии — текущий период, серый пунктир —
+                        предыдущий
+                      </p>
+                    </>
+                  )}
+                </Block>
+              );
             })}
           </div>
-        </section>
-
-        <footer className="approved-footer">Навигатор продаж <span>Данные берутся из подключённых API. Недоступные показатели не подменяются демонстрационными цифрами.</span></footer>
-      </div>
-
-
+        )}
+      </section>
+      {canFinance && (
+        <>
+          <section className="finance-section" id="finance-summary">
+            <div className="section-heading">
+              <div>
+                <h2>Сводка по финансам</h2>
+                <div className="month">
+                  {new Date(today + "T12:00:00Z").toLocaleDateString("ru-RU", {
+                    month: "long",
+                    year: "numeric",
+                  })}
+                </div>
+                <p className="month-note">*данные по текущему месяцу</p>
+              </div>
+              <Toggle
+                primary
+                open={financeOpen.size === 7}
+                label="разбивки всех финансовых карточек"
+                onClick={() =>
+                  setFinanceOpen(
+                    new Set(
+                      financeOpen.size === 7
+                        ? []
+                        : metricLabels.map((m) => m[0]),
+                    ),
+                  )
+                }
+              />
+            </div>
+            {financeErrors.map((message) => (
+              <p className="dashboard-warning" key={message}>
+                {message}
+              </p>
+            ))}
+            <div className="finance-grid">
+              {metricLabels.map(([key, label]) => (
+                <Block
+                  id={"finance-" + key}
+                  title={label}
+                  stores={selected}
+                  period={companyMonth + " — " + today}
+                  sourceData={{
+                    value: totals[key],
+                    stores: selected.map((s) => ({
+                      id: s.id,
+                      value: finances[s.id]?.[key],
+                    })),
+                  }}
+                  financeCard
+                  key={key}
+                  toggle={
+                    <Toggle
+                      open={financeOpen.has(key)}
+                      label={label.toLowerCase() + " по площадкам"}
+                      onClick={() =>
+                        setFinanceOpen((current) => {
+                          const next = new Set(current);
+                          if (next.has(key)) next.delete(key);
+                          else next.add(key);
+                          return next;
+                        })
+                      }
+                    />
+                  }
+                >
+                  {" "}
+                  <div className="finance-value">
+                    <FinanceValue
+                      value={totals[key]}
+                      percent={key === "profitability"}
+                    />
+                    <Change
+                      value={totals[key]}
+                      previous={null}
+                      inverse={["expenses", "cost", "ads", "extra"].includes(
+                        key,
+                      )}
+                    />
+                  </div>
+                  {financeOpen.has(key) && (
+                    <div className="finance-breakdown">
+                      {platforms.map((p) => (
+                        <div className="finance-row" key={p}>
+                          <Market platform={p} />
+                          <div className="finance-market-values">
+                            <FinanceValue
+                              value={completeSum(
+                                selected
+                                  .filter((s) => s.marketplace === p)
+                                  .map((s) => finances[s.id]?.[key]),
+                              )}
+                              percent={key === "profitability"}
+                            />
+                            <Change value={null} previous={null} />
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </Block>
+              ))}
+            </div>
+          </section>
+          <section className="stores-section" id="stores-section">
+            <div className="section-heading">
+              <div>
+                <h2>По магазинам</h2>
+                <p className="month-note">
+                  Подробно по каждому подключённому магазину
+                </p>
+              </div>
+            </div>
+            <div className="stores-list">
+              {selected.map((s) => {
+                const finance = finances[s.id] ?? blankFinance(),
+                  report = reports[s.id],
+                  expenses = [
+                    ["Комиссия", report?.totals.marketplaceReward],
+                    ["Логистика", report?.totals.delivery],
+                    [
+                      "Услуги",
+                      report
+                        ? completeSum([
+                            report.totals.storage,
+                            report.totals.acceptance,
+                            report.totals.acquiring,
+                          ])
+                        : null,
+                    ],
+                    [
+                      "Прочее",
+                      report
+                        ? completeSum([
+                            report.totals.penalties,
+                            report.totals.deductions,
+                          ])
+                        : null,
+                    ],
+                  ] as const;
+                return (
+                  <article className="store" key={s.id}>
+                    <div className="store-title">
+                      <span
+                        className={"market-dot " + platformClass(s.marketplace)}
+                      />
+                      <h3>
+                        {platformName(s.marketplace)}{" "}
+                        <span className="store-name">— {s.storeName}</span>
+                      </h3>
+                    </div>
+                    <div className="store-panels">
+                      <Block
+                        id={"store-" + s.id + "-revenue"}
+                        title="Из чего складывается выручка"
+                        stores={[s]}
+                        period={companyMonth + " — " + today}
+                        sourceData={finance}
+                        small
+                      >
+                        <p className="store-revenue">
+                          Выручка: <FinanceValue value={finance.revenue} />
+                          <Change value={finance.revenue} previous={null} />
+                        </p>
+                        <Waterfall finance={finance} name={s.storeName} />
+                        <div className="profitability">
+                          <span>Рентабельность</span>
+                          <FinanceValue value={finance.profitability} percent />
+                        </div>
+                      </Block>
+                      <Block
+                        id={"store-" + s.id + "-expenses"}
+                        title="Расходы"
+                        stores={[s]}
+                        period={companyMonth + " — " + today}
+                        sourceData={{
+                          expenses: finance.expenses,
+                          items: expenses,
+                        }}
+                        small
+                      >
+                        <div className="expenses-total">
+                          <FinanceValue value={finance.expenses} />
+                        </div>
+                        {expenses.map(([label, raw]) => {
+                          const value = raw ?? null,
+                            share =
+                              value !== null &&
+                              finance.expenses !== null &&
+                              finance.expenses > 0
+                                ? (value / finance.expenses) * 100
+                                : null;
+                          return (
+                            <div className="expense-item" key={label}>
+                              <div className="expense-line">
+                                <span>{label}</span>
+                                <span className="expense-amount">
+                                  <FinanceValue value={value} />
+                                  <Change value={value} previous={null} />
+                                  <small>
+                                    Доля{" "}
+                                    {share === null
+                                      ? "Нет данных"
+                                      : share.toLocaleString("ru-RU", {
+                                          maximumFractionDigits: 1,
+                                        }) + "%"}
+                                  </small>
+                                </span>
+                              </div>
+                              <div className="expense-progress">
+                                {share !== null && (
+                                  <span
+                                    style={{
+                                      width:
+                                        Math.max(0, Math.min(100, share)) + "%",
+                                      background: platformColor(s.marketplace),
+                                    }}
+                                  />
+                                )}
+                              </div>
+                              {label === "Логистика" && (
+                                <div className="logistics-detail">
+                                  {[
+                                    "Доставки покупателям",
+                                    "Отмены и возвраты",
+                                  ].map((title) => (
+                                    <div className="logistics-row" key={title}>
+                                      <span>{title}</span>
+                                      <div>
+                                        <strong>Нет данных</strong>
+                                        <small>Доля: Нет данных</small>
+                                      </div>
+                                    </div>
+                                  ))}
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </Block>
+                    </div>
+                  </article>
+                );
+              })}
+            </div>
+          </section>
+        </>
+      )}
+      {topVisible && (
+        <button
+          className="dashboard-back-top"
+          style={{ right: controlRight }}
+          aria-label="Вернуться в начало страницы"
+          onClick={() => {
+            root.current?.focus({ preventScroll: true });
+            window.scrollTo({
+              top: 0,
+              behavior: window.matchMedia("(prefers-reduced-motion: reduce)")
+                .matches
+                ? "instant"
+                : "smooth",
+            });
+          }}
+        >
+          <ArrowUp size={22} />
+        </button>
+      )}
     </div>
+  );
+}
+function Waterfall({ finance, name }: { finance: Finance; name: string }) {
+  const rows: [string, number | null][] = [
+      ["Выручка", finance.revenue],
+      ["Себестоимость", finance.cost],
+      ["Расходы", finance.expenses],
+      ["Реклама", finance.ads],
+      ["Доп. расходы", finance.extra],
+      ["Маржа", finance.margin],
+    ],
+    W = 640,
+    H = 245,
+    base = 190,
+    peak = Math.max(1, ...rows.flatMap(([, v]) => (v === null ? [] : [v]))),
+    y = (v: number) => base - (v / peak) * 155,
+    complete = rows.every(([, v]) => v !== null);
+  let cumulative = 0;
+  return (
+    <svg
+      className="waterfall"
+      viewBox={`0 0 ${W} ${H}`}
+      role="img"
+      aria-label={"Из чего складывается выручка " + name}
+    >
+      <title>
+        Структура выручки. Отсутствующие компоненты не рассчитываются.
+      </title>
+      {[0, 1, 2].map((k) => (
+        <g key={k}>
+          <line
+            x1={63}
+            x2={623}
+            y1={y((peak * k) / 2)}
+            y2={y((peak * k) / 2)}
+            className="grid-line"
+          />
+          <text
+            x={56}
+            y={y((peak * k) / 2) + 4}
+            textAnchor="end"
+            className="waterfall-axis"
+          >
+            {quantity((peak * k) / 2)}
+          </text>
+        </g>
+      ))}
+      {rows.map(([label, value], i) => {
+        const x = [105, 211, 302, 393, 484, 575][i],
+          start = i === 0 ? 0 : cumulative;
+        if (i > 0 && value !== null) cumulative += value;
+        return (
+          <g key={label}>
+            {value !== null && (i === 0 || complete) && (
+              <rect
+                x={x - 24.5}
+                y={y(start + value)}
+                width={49}
+                height={Math.max(0, (value / peak) * 155)}
+                rx={4}
+                fill={i === 0 ? "#2f7a6a" : i === 5 ? "#83af99" : "#c4d9cd"}
+              />
+            )}
+            <text x={x} y={213} textAnchor="middle" className="waterfall-label">
+              {label === "Себестоимость" ? "Себесто-" : label}
+            </text>
+            {label === "Себестоимость" && (
+              <text
+                x={x}
+                y={227}
+                textAnchor="middle"
+                className="waterfall-label"
+              >
+                имость
+              </text>
+            )}
+            <text
+              x={x}
+              y={
+                value !== null && (i === 0 || complete)
+                  ? y(start + value) - 8
+                  : 95
+              }
+              textAnchor="middle"
+              className="waterfall-value"
+            >
+              {value === null ? "Нет данных" : money(value)}
+            </text>
+          </g>
+        );
+      })}
+    </svg>
   );
 }

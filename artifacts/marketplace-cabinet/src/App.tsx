@@ -66,8 +66,10 @@ function Workspace({ children, userEmail, onLogout }: { children: React.ReactNod
         }
       }).catch(() => undefined);
     };
+    const changeStore=()=>setActiveStoreId(localStorage.getItem('navigator-active-store-id')??'');
+    window.addEventListener('dashboard-store-changed',changeStore);
     window.addEventListener('marketplace-stores-updated', refreshStores);
-    return () => window.removeEventListener('marketplace-stores-updated', refreshStores);
+    return () => {window.removeEventListener('dashboard-store-changed',changeStore);window.removeEventListener('marketplace-stores-updated', refreshStores);};
   }, []);
   const elevated = workspace?.role === 'owner' || workspace?.role === 'admin';
   const visibleNav = NAV.filter((item) => item.href === '/team' || !workspace || elevated || currentMember?.sections.includes(
@@ -85,7 +87,7 @@ function Workspace({ children, userEmail, onLogout }: { children: React.ReactNod
       <main className="main">
         <div className="app-topbar">
           <button className="mobile-menu-btn" aria-label="Меню" onClick={() => setOpen((v) => !v)}><Menu size={18} /></button>
-          <div className="account-bar">{workspace && workspace.companies.length > 1 && <select aria-label="Активная компания" value={workspace.activeCompanyId} onChange={(event) => void changeCompany(event.target.value)}>{workspace.companies.map((company) => <option key={company.id} value={company.id}>{company.name}</option>)}</select>}{stores.length > 0 && <select aria-label="Фильтр по магазину" value={activeStoreId} onChange={(event) => { const id = event.target.value; if (id) localStorage.setItem('navigator-active-store-id', id); else localStorage.removeItem('navigator-active-store-id'); setActiveStoreId(id); window.location.reload(); }}><option value="">Все магазины</option>{stores.map((store) => <option key={store.id} value={store.id}>{store.storeName} · {store.marketplace === 'ozon' ? 'Ozon' : 'Wildberries'}</option>)}</select>}<span title={userEmail}>{userEmail}</span><button className="btn" onClick={onLogout}>Выйти</button></div>
+          <div className="account-bar">{workspace && workspace.companies.length > 1 && <select aria-label="Активная компания" value={workspace.activeCompanyId} onChange={(event) => void changeCompany(event.target.value)}>{workspace.companies.map((company) => <option key={company.id} value={company.id}>{company.name}</option>)}</select>}{stores.length > 0 && location !== '/' && <select aria-label="Фильтр по магазину" value={activeStoreId} onChange={(event) => { const id = event.target.value; if (id) localStorage.setItem('navigator-active-store-id', id); else localStorage.removeItem('navigator-active-store-id'); setActiveStoreId(id); window.location.reload(); }}><option value="">Все магазины</option>{stores.map((store) => <option key={store.id} value={store.id}>{store.storeName} · {store.marketplace === 'ozon' ? 'Ozon' : 'Wildberries'}</option>)}</select>}<span title={userEmail}>{userEmail}</span><button className="btn" onClick={onLogout}>Выйти</button></div>
         </div>
         {children}
       </main>
