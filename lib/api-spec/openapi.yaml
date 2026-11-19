@@ -75,7 +75,7 @@ paths:
     post:
       operationId: connectOzon
       tags: [marketplace]
-      summary: Verify and save Ozon Seller API credentials
+      summary: Verify and save both Ozon Seller and Performance API credentials
       requestBody:
         required: true
         content:
@@ -123,6 +123,43 @@ paths:
                 $ref: "#/components/schemas/Error"
         "401":
           description: Authentication required
+  /marketplace/stores/{id}/ozon-performance:
+    put:
+      operationId: updateOzonStorePerformance
+      tags: [marketplace]
+      summary: Add or replace Performance API credentials for an existing Ozon store
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+            minimum: 1
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PerformanceCredentialsInput"
+      responses:
+        "200":
+          description: Verified and saved; credentials are never returned
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  connected:
+                    type: boolean
+                required: [connected]
+        "400":
+          description: Invalid or rejected Performance API credentials
+        "401":
+          description: Authentication required
+        "403":
+          description: Company role cannot manage connections
+        "404":
+          description: Store is not accessible in the active company
   /marketplace/connections/{marketplace}:
     delete:
       operationId: disconnectMarketplace
@@ -164,7 +201,31 @@ components:
         apiKey:
           type: string
           minLength: 1
-      required: [clientId, apiKey]
+        performance:
+          type: object
+          properties:
+            clientId:
+              type: string
+              minLength: 1
+              maxLength: 2000
+            clientSecret:
+              type: string
+              minLength: 1
+              maxLength: 4000
+          required: [clientId, clientSecret]
+      required: [clientId, apiKey, performance]
+    PerformanceCredentialsInput:
+      type: object
+      properties:
+        clientId:
+          type: string
+          minLength: 1
+          maxLength: 2000
+        clientSecret:
+          type: string
+          minLength: 1
+          maxLength: 4000
+      required: [clientId, clientSecret]
     WildberriesCredentialsInput:
       type: object
       properties:

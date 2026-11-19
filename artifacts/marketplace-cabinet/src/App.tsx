@@ -26,7 +26,7 @@ const NAV = [
   { href: '/analytics', label: 'Аналитика', icon: BarChart3, match: (p: string) => p === '/analytics' },
   { href: '/finance', label: 'Финансы', icon: Wallet, match: (p: string) => p === '/finance' },
   { href: '/products', label: 'Товары', icon: Package, match: (p: string) => p === '/products' || p === '/cogs' },
-  { href: '/settings', label: 'Настройки', icon: Settings, match: (p: string) => p === '/settings' },
+  { href: '/settings', label: 'Подключения API', icon: Settings, match: (p: string) => p === '/settings' },
   { href: '/team', label: 'Компания и команда', icon: UsersRound, match: (p: string) => p === '/team' },
   { href: '/tasks', label: 'Задачи', icon: ListTodo, match: (p: string) => p === '/tasks' },
 ];
@@ -51,6 +51,19 @@ function Workspace({ children, userEmail, onLogout }: { children: React.ReactNod
     try { await switchCompany(companyId); window.location.reload(); } catch { window.alert('Не удалось переключить компанию. Обновите страницу и попробуйте снова.'); }
   }
   const currentMember = workspace?.members.find((member) => member.userId === workspace.currentUserId);
+  useEffect(() => {
+    const refreshStores = () => {
+      void getMarketplaceStores().then(result => {
+        setStores(result.stores);
+        const selected = localStorage.getItem('navigator-active-store-id');
+        if (selected && !result.stores.some(store => String(store.id) === selected)) {
+          localStorage.removeItem('navigator-active-store-id'); setActiveStoreId('');
+        }
+      }).catch(() => undefined);
+    };
+    window.addEventListener('marketplace-stores-updated', refreshStores);
+    return () => window.removeEventListener('marketplace-stores-updated', refreshStores);
+  }, []);
   const elevated = workspace?.role === 'owner' || workspace?.role === 'admin';
   const visibleNav = NAV.filter((item) => item.href === '/team' || !workspace || elevated || currentMember?.sections.includes(
     item.href === '/' ? 'dashboard' : item.href === '/marketplaces' ? 'marketplaces' : item.href.slice(1),

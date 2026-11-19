@@ -20,4 +20,7 @@ export * from './marketplaceDashboard';
 export * from './marketplaceDashboardMarketplace';
 export * from './marketplaceDashboardPeriod';
 export * from './ozonCredentialsInput';
+export * from './ozonCredentialsInputPerformance';
+export * from './performanceCredentialsInput';
+export * from './updateOzonStorePerformance200';
 export * from './wildberriesCredentialsInput';

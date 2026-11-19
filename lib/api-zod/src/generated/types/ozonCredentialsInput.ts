@@ -5,10 +5,12 @@
  * Seller analytics and marketplace connection API
  * OpenAPI spec version: 0.1.0
  */
+import type { OzonCredentialsInputPerformance } from './ozonCredentialsInputPerformance';
 
 export interface OzonCredentialsInput {
   /** @minLength 1 */
   clientId: string;
   /** @minLength 1 */
   apiKey: string;
+  performance: OzonCredentialsInputPerformance;
 }

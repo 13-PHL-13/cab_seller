@@ -13,11 +13,38 @@ export interface Error {
   error: string;
 }
 
+export type OzonCredentialsInputPerformance = {
+  /**
+     * @minLength 1
+     * @maxLength 2000
+     */
+  clientId: string;
+  /**
+     * @minLength 1
+     * @maxLength 4000
+     */
+  clientSecret: string;
+};
+
 export interface OzonCredentialsInput {
   /** @minLength 1 */
   clientId: string;
   /** @minLength 1 */
   apiKey: string;
+  performance: OzonCredentialsInputPerformance;
+}
+
+export interface PerformanceCredentialsInput {
+  /**
+     * @minLength 1
+     * @maxLength 2000
+     */
+  clientId: string;
+  /**
+     * @minLength 1
+     * @maxLength 4000
+     */
+  clientSecret: string;
 }
 
 export interface WildberriesCredentialsInput {
@@ -124,4 +151,8 @@ export const GetMarketplaceDashboardMarketplace = {
   ozon: 'ozon',
   wildberries: 'wildberries',
 } as const;
+
+export type UpdateOzonStorePerformance200 = {
+  connected: boolean;
+};
 
