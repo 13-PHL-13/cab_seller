@@ -8,7 +8,7 @@
     "build": "node ./build.mjs",
     "start": "node --use-system-ca --env-file-if-exists=.env --enable-source-maps ./dist/index.mjs",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "node --experimental-strip-types --test src/lib/auth.test.ts src/lib/marketplace-finance.test.ts src/lib/ozon-performance.test.ts src/lib/marketplace-access.test.ts src/lib/task-policy.test.ts src/lib/ai-balance.test.ts src/lib/dashboard-layout.test.ts src/lib/task-block.test.ts",
+    "test": "node --experimental-strip-types --test src/lib/auth.test.ts src/lib/marketplace-finance.test.ts src/lib/ozon-performance.test.ts src/lib/marketplace-access.test.ts src/lib/task-policy.test.ts src/lib/ai-balance.test.ts src/lib/dashboard-layout.test.ts src/lib/task-block.test.ts src/lib/commerce-policy.test.ts",
     "seed:cogs:test": "node --experimental-strip-types --env-file-if-exists=.env ./scripts/seed-cogs-test-data.ts"
   },
   "dependencies": {
