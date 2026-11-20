@@ -94,3 +94,15 @@
 .prototype-dashboard .dashboard-source-status { flex-basis:100%; font-size:12px; color:#806020; line-height:1.5; }
 .prototype-dashboard .dashboard-source-status summary { cursor:pointer; width:fit-content; }
 .prototype-dashboard .dashboard-source-status p { margin:6px 0; }
+
+/* Keep store finance amounts, comparisons and shares separate. */
+.prototype-dashboard .store-panel .expense-amount{display:flex;align-items:baseline;justify-content:flex-end;flex-wrap:wrap;gap:8px 12px;font-variant-numeric:tabular-nums;white-space:normal}
+.prototype-dashboard .store-panel .expenses-total{display:flex;align-items:baseline;flex-wrap:wrap;gap:8px}
+.prototype-dashboard .store-panel .expense-line{align-items:baseline;gap:8px 16px}
+.prototype-dashboard .store-panel .expense-line>span:first-child{min-width:0}
+.prototype-dashboard .store-finance-note{font-size:12px;line-height:1.5;color:#526c60;margin:10px 0}
+.prototype-dashboard .store-finance-chart{max-width:100%;overflow-x:auto}
+.prototype-dashboard .store-panel .waterfall{display:block;width:100%;min-width:540px;max-height:none}
+.prototype-dashboard .store-panel .waterfall-value{font-size:12px}
+.prototype-dashboard .store-panel .waterfall-label{font-size:11px}
+.prototype-dashboard .store-panel .waterfall-axis{font-size:11px}

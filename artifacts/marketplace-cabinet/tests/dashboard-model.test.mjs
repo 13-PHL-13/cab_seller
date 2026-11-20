@@ -75,3 +75,15 @@ test('partial totals keep available stores and disclose unavailable or unsupport
  assert.equal(sameMetricCohort(stores,current,current,'orders'),true);
  assert.equal(sameMetricCohort(stores,current,current,'bought'),false);
 });
+
+
+test('store finance retains expenses with missing profit inputs and signed adjustments', async()=>{
+ const {storeFinanceBars}=await import('../src/lib/store-finance-model.ts');
+ const bars=storeFinanceBars([172763,null,185713.7,null,null,null]);
+ assert.deepEqual(bars[2],{value:185713.7,from:0,to:185713.7});
+ assert.deepEqual(bars[1],{value:null,from:0,to:0});
+ assert.deepEqual(storeFinanceBars([0,-250,Infinity])[1],{value:-250,from:0,to:-250});
+ assert.equal(storeFinanceBars([0,-250,Infinity])[0].value,0);
+ assert.equal(storeFinanceBars([0,-250,Infinity])[2].value,null);
+ assert.ok(storeFinanceBars([null,null]).every(bar=>bar.value===null));
+});

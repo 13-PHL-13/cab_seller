@@ -20,6 +20,7 @@ import { getDashboardWindow } from "@/lib/dashboard-api";
 import {previousFinancePeriod,financePeriodAmounts,financeComparisonBaseline} from '@/lib/finance-comparison';
 import {
   completeSum,
+  change,
   metricCoverage,
   chartCoverage,
   dailyMetricSum,
@@ -42,6 +43,7 @@ import DashboardChart, {
   Change,
   type ChartSeries,
 } from "@/components/DashboardChart";
+import { storeFinanceBars } from "@/lib/store-finance-model";
 import "./dashboard-prototype.css";
 const platformName = (platform: string) =>
   platform === "ozon" ? "Ozon" : "ВБ";
@@ -1337,9 +1339,10 @@ export default function DashboardPage() {
                 const finance = finances[s.id] ?? blankFinance(),
                   report = reports[s.id],
                   ozon=ozonReports[s.id]?.dashboard,
+                  previousDetails = financePrevious.comparable ? financePeriodAmounts(previousOzonReports[s.id], financePrevious.from, financePrevious.to) : undefined,
                   expenses = [
-                    ["Комиссия", ozon?.commission??report?.totals.marketplaceReward],
-                    ["Логистика", ozon?.logistics??report?.totals.delivery],
+                    ["Комиссия", ozon?.commission??report?.totals.marketplaceReward, previousDetails?.commission],
+                    ["Логистика", ozon?.logistics??report?.totals.delivery, previousDetails?.logistics],
                     [
                       "Услуги",
                       ozon ? null : report
@@ -1351,13 +1354,14 @@ export default function DashboardPage() {
                         : null,
                     ],
                     [
-                      "Прочее",
+                      ozon ? "Нерасшифрованные начисления" : "Прочее",
                       ozon ? ozon.other : report
                         ? completeSum([
                             report.totals.penalties,
                             report.totals.deductions,
                           ])
                         : null,
+                      previousDetails?.other,
                     ],
                   ] as const;
                 return (
@@ -1387,7 +1391,7 @@ export default function DashboardPage() {
                         <Waterfall finance={finance} name={s.storeName} />
                         <div className="profitability">
                           <span>Рентабельность</span>
-                          <FinanceValue value={finance.profitability} percent />
+                          {finance.profitability === null ? <strong>Не рассчитана</strong> : <FinanceValue value={finance.profitability} percent />}
                         </div>
                       </Block>
                       <Block
@@ -1403,8 +1407,9 @@ export default function DashboardPage() {
                       >
                         <div className="expenses-total">
                           <FinanceValue value={finance.expenses} />
+                          {change(finance.expenses, financeBaseline([s], "expenses")) !== null && <Change value={finance.expenses} previous={financeBaseline([s], "expenses")} inverse title={financeComparisonTitle} />}
                         </div>
-                        {expenses.map(([label, raw]) => {
+                        {expenses.map(([label, raw, previous]) => {
                           const value = raw ?? null,
                             share =
                               value !== null &&
@@ -1418,44 +1423,20 @@ export default function DashboardPage() {
                                 <span>{label}</span>
                                 <span className="expense-amount">
                                   <FinanceValue value={value} />
-                                  <Change value={value} previous={null} />
-                                  <small>
+                                  {change(value, previous ?? null) !== null && <Change value={value} previous={previous ?? null} inverse title={financeComparisonTitle} />}
+                                  {share !== null && <small>
                                     Доля{" "}
-                                    {share === null
-                                      ? "Нет данных"
-                                      : share.toLocaleString("ru-RU", {
+                                    {share.toLocaleString("ru-RU", {
                                           maximumFractionDigits: 1,
                                         }) + "%"}
-                                  </small>
+                                  </small>}
                                 </span>
                               </div>
-                              <div className="expense-progress">
-                                {share !== null && (
-                                  <span
-                                    style={{
-                                      width:
-                                        Math.max(0, Math.min(100, share)) + "%",
-                                      background: platformColor(s.marketplace),
-                                    }}
-                                  />
-                                )}
-                              </div>
-                              {label === "Логистика" && (
-                                <div className="logistics-detail">
-                                  {[
-                                    "Доставки покупателям",
-                                    "Отмены и возвраты",
-                                  ].map((title) => (
-                                    <div className="logistics-row" key={title}>
-                                      <span>{title}</span>
-                                      <div>
-                                        <strong>Нет данных</strong>
-                                        <small>Доля: Нет данных</small>
-                                      </div>
-                                    </div>
-                                  ))}
-                                </div>
-                              )}
+                              {share !== null && <div className="expense-progress">
+                                <span style={{ width: Math.max(0, Math.min(100, share)) + "%", background: platformColor(s.marketplace) }} />
+                              </div>}
+                              {label === "Логистика" && <p className="store-finance-note">Разбивка доставок, отмен и возвратов пока не загружена.</p>}
+                              {ozon && label === "Нерасшифрованные начисления" && <p className="store-finance-note">Расшифровка по видам услуг пока не подключена.</p>}
                             </div>
                           );
                         })}
@@ -1492,93 +1473,41 @@ export default function DashboardPage() {
 }
 function Waterfall({ finance, name }: { finance: Finance; name: string }) {
   const rows: [string, number | null][] = [
-      ["Выручка", finance.revenue],
-      ["Себестоимость", finance.cost],
-      ["Расходы", finance.expenses],
-      ["Реклама", finance.ads],
-      ["Доп. расходы", finance.extra],
-      ["Маржа", finance.margin],
-    ],
-    W = 640,
-    H = 245,
-    base = 190,
-    peak = Math.max(1, ...rows.flatMap(([, v]) => (v === null ? [] : [v]))),
-    y = (v: number) => base - (v / peak) * 155,
-    complete = rows.every(([, v]) => v !== null);
-  let cumulative = 0;
-  return (
-    <svg
-      className="waterfall"
-      viewBox={`0 0 ${W} ${H}`}
-      role="img"
-      aria-label={"Из чего складывается выручка " + name}
-    >
-      <title>
-        Структура выручки. Отсутствующие компоненты не рассчитываются.
-      </title>
-      {[0, 1, 2].map((k) => (
-        <g key={k}>
-          <line
-            x1={63}
-            x2={623}
-            y1={y((peak * k) / 2)}
-            y2={y((peak * k) / 2)}
-            className="grid-line"
-          />
-          <text
-            x={56}
-            y={y((peak * k) / 2) + 4}
-            textAnchor="end"
-            className="waterfall-axis"
-          >
-            {quantity((peak * k) / 2)}
-          </text>
-        </g>
-      ))}
-      {rows.map(([label, value], i) => {
-        const x = [105, 211, 302, 393, 484, 575][i],
-          start = i === 0 ? 0 : cumulative;
-        if (i > 0 && value !== null) cumulative += value;
-        return (
-          <g key={label}>
-            {value !== null && (i === 0 || complete) && (
-              <rect
-                x={x - 24.5}
-                y={y(start + value)}
-                width={49}
-                height={Math.max(0, (value / peak) * 155)}
-                rx={4}
-                fill={i === 0 ? "#2f7a6a" : i === 5 ? "#83af99" : "#c4d9cd"}
-              />
-            )}
-            <text x={x} y={213} textAnchor="middle" className="waterfall-label">
-              {label === "Себестоимость" ? "Себесто-" : label}
-            </text>
-            {label === "Себестоимость" && (
-              <text
-                x={x}
-                y={227}
-                textAnchor="middle"
-                className="waterfall-label"
-              >
-                имость
-              </text>
-            )}
-            <text
-              x={x}
-              y={
-                value !== null && (i === 0 || complete)
-                  ? y(start + value) - 8
-                  : 95
-              }
-              textAnchor="middle"
-              className="waterfall-value"
-            >
-              {value === null ? "Нет данных" : money(value)}
-            </text>
-          </g>
-        );
-      })}
-    </svg>
-  );
+    ["Выручка", finance.revenue], ["Себестоимость", finance.cost],
+    ["Расходы", finance.expenses], ["Реклама", finance.ads],
+    ["Доп. расходы", finance.extra], ["Маржа", finance.margin],
+  ];
+  const bars = storeFinanceBars(rows.map(([, value]) => value));
+  const low = Math.min(0, ...bars.map(bar => bar.to));
+  const high = Math.max(0, ...bars.map(bar => bar.to));
+  const span = high - low || 1;
+  const y = (value: number) => 190 - (value - low) / span * 150;
+  const incomplete = bars.some(bar => bar.value === null);
+  return <>
+    <p className="store-finance-note">{incomplete
+      ? "Расчёт прибыли не завершён. Показаны только известные суммы."
+      : "Показаны отдельные суммы. Расходы могут включать рекламу."}</p>
+    <div className="store-finance-chart">
+      <svg className="waterfall" viewBox="0 0 640 245" role="img" aria-label={"Финансовые показатели магазина " + name}>
+        <title>Известные суммы показаны отдельными столбцами. Прочерк — данные не загружены.</title>
+        {(high === low ? [0] : [0, 1, 2]).map(index => {
+          const tick = low + span * index / 2;
+          return <g key={index}>
+            <line x1={72} x2={633} y1={y(tick)} y2={y(tick)} className="grid-line" />
+            <text x={66} y={y(tick) + 4} textAnchor="end" className="waterfall-axis">{quantity(tick)}</text>
+          </g>;
+        })}
+        {rows.map(([label], index) => {
+          const bar = bars[index], x = [118, 215, 308, 401, 494, 587][index];
+          const lines = label === "Себестоимость" ? ["Себесто-", "имость"] : label === "Доп. расходы" ? ["Доп.", "расходы"] : [label];
+          return <g key={label}>
+            <title>{label}: {bar.value === null ? "данные не загружены" : money(bar.value)}</title>
+            {bar.value !== null && <rect x={x - 24} y={Math.min(y(0), y(bar.to))} width={48} height={Math.abs(y(0) - y(bar.to))} rx={4} fill={index === 0 ? "#2f7a6a" : index === 5 ? "#83af99" : "#c4d9cd"} />}
+            <text x={x} y={bar.value === null ? y(0) - 8 : bar.to < 0 ? y(bar.to) + 15 : y(bar.to) - 8} textAnchor="middle" className="waterfall-value">{bar.value === null ? "—" : money(bar.value)}</text>
+            {lines.map((line, row) => <text key={line} x={x} y={214 + row * 14} textAnchor="middle" className="waterfall-label">{line}</text>)}
+          </g>;
+        })}
+      </svg>
+    </div>
+  </>;
 }
