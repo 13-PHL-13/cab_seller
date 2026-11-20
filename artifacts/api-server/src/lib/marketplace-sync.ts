@@ -145,6 +145,16 @@ export async function sharedDataset<T>(connection: MarketplaceConnection, kind: 
     throw new SyncDeferred(Math.max(Date.now() + 5000, new Date(row.next_attempt_at).getTime()),'budget',detail);
   }
   const result = unpackSyncResult<T>(value);
+  // During a zero-downtime rollout an older worker may finish a migrated job.
+  // Validate the derived shape as well as params so those old results cannot
+  // stay 'ready' until the next 12-hour finance refresh.
+  const shape=result as Record<string,unknown>;
+  const outdated=connection.marketplace==='ozon'&&kind==='finance'&&!shape.dashboardDiagnostics
+    ||connection.marketplace==='wildberries'&&kind==='snapshot'&&shape.funnel&&!shape.wbDailyFunnel;
+  if(outdated&&row.state==='ready'){
+    await pool.query("UPDATE marketplace_sync_jobs SET state='queued',next_attempt_at=now() WHERE id=$1 AND state='ready'",[id]);
+    row.state='queued';row.next_attempt_at=new Date();
+  }
   return Object.assign(result as object, { sync: {
     state: row.state, updatedAt: row.updated_at?.toISOString() ?? null,
     nextAttemptAt: new Date(row.next_attempt_at).toISOString(),
