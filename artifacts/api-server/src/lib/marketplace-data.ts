@@ -336,7 +336,7 @@ function readWildberriesFunnel(
   const total = { orders: 0, units: 0, views: 0, cartAdds: 0, orderAmount: 0 as number|null };
   for (const rawCard of wildberriesCards(response)) {
     const card = asRecord(rawCard);
-    const statistics = asRecord(card["statistics"]);
+    const statistics = asRecord(card["statistic"] ?? card["statistics"]);
     const selected =
       asRecord(statistics["selectedPeriod"]).openCount !== undefined
         ? asRecord(statistics["selectedPeriod"])

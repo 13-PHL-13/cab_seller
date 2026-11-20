@@ -5,7 +5,8 @@ import { dashboardStoreData } from './dashboard-layout.ts';
 
 const today=new Date().toISOString().slice(0,10);
 const yesterday=new Date(Date.now()-86400000).toISOString().slice(0,10);
-const funnel={data:{products:[{statistics:{selected:{openCount:20,cartCount:8,orderCount:5,buyoutCount:3}}}]}};
+// Official ItemsResponse uses singular `statistic`, not `statistics`.
+const funnel={data:{products:[{statistic:{selected:{openCount:20,cartCount:8,orderCount:5,buyoutCount:3,orderSum:500}}}]}};
 
 test('WB funnel continues after the first 1000 products',async(t)=>{
   const offsets:number[]=[];
