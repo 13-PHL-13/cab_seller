@@ -1,3 +1,5 @@
+import { SyncDeferred } from '../lib/sync-context';
+import { sharedDataset, sharedSnapshot } from '../lib/marketplace-sync';
 
 import { and, desc, eq, inArray, or } from "drizzle-orm";
 import { Router, type IRouter, type RequestHandler } from "express";
@@ -296,7 +298,6 @@ async function marketplaceJson(url: string, credentials: Record<string, string>,
 }
 
 const ozonCategoryCache = new Map<string, { expiresAt: number; categories: Array<Record<string, unknown>> }>();
-const minPriceSourceCache = new Map<string, { expiresAt: number; payoutRate: number; revenue: number; payout: number }>();
 type MinPriceSource = { revenue: number; payout: number; payoutRate: number } | null | { error: string };
 
 async function findMarketplaceConnection(req: import("express").Request, marketplace: "ozon" | "wildberries") {
@@ -377,30 +378,25 @@ async function getMinPriceSource(req: import("express").Request, marketplace: "o
   let revenue = 0;
   let payout = 0;
   for (const connection of connections) {
-    const cacheKey = `${companyId(req)}:${connection.id}:${connection.updatedAt.getTime()}:${from}:${to}`;
-    const cached = minPriceSourceCache.get(cacheKey);
-    if (cached && cached.expiresAt > Date.now()) { revenue += cached.revenue; payout += cached.payout; continue; }
     const credentials = decryptCredentials<Record<string, string>>(connection.credentialsCiphertext);
     let storeRevenue = 0;
     let storePayout = 0;
     if (marketplace === "wildberries") {
-      const report = await getWildberriesFinanceReport(credentials.apiKey ?? "", from, to);
+      const report = await sharedDataset<Awaited<ReturnType<typeof getWildberriesFinanceReport>>>(connection, "finance", { from, to });
       if(report.incomplete)throw new Error('Предыдущий месяц загружен не полностью. Минимальные цены пока не рассчитаны.');
       storeRevenue = report.totals.retailAmount;
       storePayout = report.totals.sellerPayout;
     } else {
-      const sales = await getOzonSnapshot(credentials as { clientId: string; apiKey: string }, from, to);
+      const sales = await sharedSnapshot(connection, from, to);
       storeRevenue = [...sales.daily.values()].reduce((sum, point) => sum + point.revenue, 0);
       const reports = [];
-      for (const period of dateChunks(from, to, 7)) reports.push(await getOzonFinanceReport(credentials as { clientId: string; apiKey: string }, period.from, period.to));
+      for (const period of dateChunks(from, to, 7)) reports.push(await sharedDataset<Awaited<ReturnType<typeof getOzonFinanceReport>>>(connection, "finance", { from: period.from, to: period.to }));
       if(reports.some(r=>r.totals.missingAmountRows>0))throw new Error('В финансовом отчёте отсутствуют суммы. Минимальные цены пока не рассчитаны.');
       storePayout = reports.reduce((sum, report) => sum + report.totals.accrued, 0);
     }
     const payoutRate = storeRevenue > 0 ? storePayout / storeRevenue : 0;
-    minPriceSourceCache.set(cacheKey, { expiresAt: Date.now() + 6 * 60 * 60_000, payoutRate, revenue: storeRevenue, payout: storePayout });
     revenue += storeRevenue;
     payout += storePayout;
-    await db.update(marketplaceConnectionsTable).set({ lastSyncAt: new Date() }).where(eq(marketplaceConnectionsTable.id, connection.id));
   }
   return connections.length && revenue > 0 ? { revenue, payout, payoutRate: payout / revenue } : null;
 }
@@ -524,79 +520,6 @@ router.get("/cogs/wildberries/subjects/:subjectId/characteristics", async (req, 
   res.json({ characteristics: array(response["data"] ?? response["result"]) });
 });
 
-async function loadProductsForImport(marketplace: "ozon" | "wildberries", credentials: Record<string, string>): Promise<ImportedMarketplaceProduct[]> {
-  const result: ImportedMarketplaceProduct[] = [];
-  if (marketplace === "ozon") {
-    let lastId = "";
-    for (let page = 0; page < 5; page += 1) {
-      const listing = await marketplaceJson("https://api-seller.ozon.ru/v3/product/list", credentials, {
-        filter: { visibility: "ALL" }, last_id: lastId, limit: 100,
-      });
-      const listingResult = record(listing["result"]);
-      const items = array(listingResult["items"]).map(record);
-      const ids = items.map((item) => Number(item["product_id"])).filter(Number.isFinite);
-      if (!ids.length) break;
-      const info = await marketplaceJson("https://api-seller.ozon.ru/v3/product/info/list", credentials, { product_id: ids });
-      // Ozon's v3 product/info/list returns `items` at the top level.
-      // Accept the nested form too for API gateways that wrap the response.
-      const infoItems = array(info["items"] ?? record(info["result"])["items"]);
-      for (const item of infoItems.map(record)) {
-        const sku = String(item["offer_id"] ?? "").trim();
-        if (!sku) continue;
-        const catalogSku = String(array(item["barcodes"])[0] ?? sku).trim().slice(0, 120) || sku;
-        const images = [...array(item["images"]), item["primary_image"]]
-          .filter((image): image is string => typeof image === "string" && /^https?:\/\//i.test(image))
-          .slice(0, 5);
-        const price = String(record(item["price"])["price"] ?? item["price"] ?? "0").replace(/[^\d.]/g, "");
-        result.push({ catalogSku, marketplaceSku: sku, externalProductId: String(item["sku"] ?? item["id"] ?? item["product_id"] ?? ""), productName: String(item["name"] ?? sku), brand: String(item["brand"] ?? ""), description: String(item["description"] ?? ""), images, price: /^\d+(?:\.\d{1,2})?$/.test(price) ? Number(price).toFixed(2) : "0.00", marketplaceData: JSON.stringify({ offerId: sku, ozonSku: item["sku"] ?? "", productId: item["id"] ?? item["product_id"] ?? "", barcode: catalogSku !== sku ? catalogSku : "", attributes: item["attributes"] ?? [] }) });
-      }
-      lastId = String(listingResult["last_id"] ?? "");
-      if (!lastId || items.length < 100) break;
-    }
-    return result;
-  }
-
-  let cursor: Record<string, unknown> = { limit: 100 };
-  for (let page = 0; page < 5; page += 1) {
-    const response = await marketplaceJson("https://content-api.wildberries.ru/content/v2/get/cards/list", credentials, {
-      settings: { cursor, filter: { withPhoto: -1 } },
-    });
-    const cards = array(response["cards"]).map(record);
-    for (const card of cards) {
-      const sku = String(card["vendorCode"] ?? "").trim();
-      if (!sku) continue;
-      const firstSize = record(array(card["sizes"])[0]);
-      const catalogSku = String(array(firstSize["skus"])[0] ?? sku).trim().slice(0, 120) || sku;
-      const photos = array(card["photos"]).map(record).map((photo) => photo["big"] ?? photo["c246x328"])
-        .filter((image): image is string => typeof image === "string" && /^https?:\/\//i.test(image)).slice(0, 5);
-      result.push({ catalogSku, marketplaceSku: sku, externalProductId: String(card["nmID"] ?? ""), productName: String(card["title"] ?? sku), brand: String(card["brand"] ?? ""), description: String(card["description"] ?? ""), images: photos, price: "0.00", marketplaceData: JSON.stringify({ nmId: card["nmID"] ?? "", subjectId: card["subjectID"] ?? "", barcode: catalogSku !== sku ? catalogSku : "", characteristics: card["characteristics"] ?? [] }) });
-    }
-    const nextCursor = record(response["cursor"]);
-    cursor = { limit: 100, updatedAt: nextCursor["updatedAt"], nmID: nextCursor["nmID"] };
-    if (cards.length < 100 || !nextCursor["updatedAt"] || !nextCursor["nmID"]) break;
-  }
-  const pricesBySku = new Map<string, string>();
-  try {
-    for (let offset = 0; offset < 10_000; offset += 1_000) {
-      const priceResponse = await marketplaceJson(
-        `https://discounts-prices-api.wildberries.ru/api/v2/list/goods/filter?limit=1000&offset=${offset}`,
-        credentials,
-      );
-      const goods = array(record(priceResponse["data"])["listGoods"]).map(record);
-      for (const good of goods) {
-        const prices = array(good["sizes"]).map(record)
-          .map((size) => Number(size["discountedPrice"] ?? size["price"]))
-          .filter((price) => Number.isFinite(price) && price > 0);
-        if (prices.length) pricesBySku.set(String(good["vendorCode"] ?? ""), Math.min(...prices).toFixed(2));
-      }
-      if (goods.length < 1_000) break;
-    }
-  } catch {
-    // Product-card import remains useful for API keys without price-read permission.
-  }
-  for (const item of result) item.price = pricesBySku.get(item.marketplaceSku) ?? item.price;
-  return result;
-}
 
 router.get("/cogs", async (req, res): Promise<void> => {
   const userId = ownerId(req);
@@ -632,11 +555,12 @@ router.post("/cogs/import/:marketplace", async (req, res): Promise<void> => {
   const credentials = decryptCredentials<Record<string, string>>(connection.credentialsCiphertext);
   let imported: ImportedMarketplaceProduct[];
   try {
-    imported = await loadProductsForImport(marketplace, credentials);
+    imported = await sharedDataset<ImportedMarketplaceProduct[]>(connection, "catalog", {});
   } catch (error) {
     req.log.warn({ marketplace, err: error }, "Marketplace catalog import request failed");
-    res.status(502).json({
-      error: error instanceof Error ? error.message : "Не удалось прочитать каталог площадки.",
+    if (error instanceof SyncDeferred) res.setHeader('Retry-After', String(Math.max(1,Math.ceil((error.retryAt-Date.now())/1000))));
+    res.status(error instanceof SyncDeferred ? 503 : 502).json({
+      error: error instanceof Error ? error.message : "Не удалось прочитать каталог площадки.", syncPending: error instanceof SyncDeferred,
     });
     return;
   }

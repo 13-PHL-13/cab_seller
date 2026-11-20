@@ -496,7 +496,7 @@ export default function DashboardPage() {
     let active = true;
     setLoading(true);
     setWindows({});
-    void Promise.allSettled([
+    const refresh = () => { void Promise.allSettled([
       getDashboardWindow("current", platform, store),
       getDashboardWindow("previous", platform, store),
     ]).then((results) => {
@@ -513,9 +513,12 @@ export default function DashboardPage() {
       setWindows(next);
       setErrors([...new Set(warnings)]);
       setLoading(false);
-    });
+    }); };
+    refresh();
+    const timer = window.setInterval(refresh, 30_000);
     return () => {
       active = false;
+      window.clearInterval(timer);
     };
   }, [platform, store]);
   useEffect(() => {
@@ -525,7 +528,7 @@ export default function DashboardPage() {
     setFinanceErrors([]);
     if (!canFinance || !stores.length) return;
     const wb = selected.filter((s) => s.marketplace === "wildberries");
-    void Promise.allSettled(
+    const refreshFinance = () => { void Promise.allSettled(
       wb.map((s) =>
         request<WildberriesFinanceReport>(
           "/api/marketplace/finance/wildberries?" +
@@ -556,8 +559,12 @@ export default function DashboardPage() {
           if (active) setExtra(r.total);
         })
         .catch(() => undefined);
+    };
+    refreshFinance();
+    const timer = window.setInterval(refreshFinance, 30_000);
     return () => {
       active = false;
+      window.clearInterval(timer);
     };
   }, [canFinance, stores, platform, store, companyMonth, today]);
   const finances = useMemo(

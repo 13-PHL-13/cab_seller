@@ -1,3 +1,4 @@
+import { providerFetch, SyncDeferred, syncContext } from './sync-context.ts';
 export type WildberriesFinanceTotals = {
   retailAmount: number;
   sellerPayout: number;
@@ -96,7 +97,7 @@ async function financeRequest(
 ): Promise<unknown[]> {
   let response: Response;
   try {
-    response = await fetch(url, {
+    response = await providerFetch(url, {
       method: "POST",
       headers: {
         Authorization: apiKey,
@@ -105,7 +106,8 @@ async function financeRequest(
       body: JSON.stringify(body),
       signal: AbortSignal.timeout(30_000),
     });
-  } catch {
+  } catch (error) {
+    if (error instanceof SyncDeferred) throw error;
     throw new Error("Финансовый API Wildberries не ответил. Повторите попытку позже.");
   }
 
@@ -132,18 +134,25 @@ export async function getWildberriesFinanceReport(
   from: string,
   to: string,
 ): Promise<WildberriesFinanceResult> {
-  const rows = await financeRequest(
-    "https://finance-api.wildberries.ru/api/finance/v1/sales-reports/detailed",
-    apiKey,
-    {
-      dateFrom: `${from}T00:00:00`,
-      dateTo: `${to}T23:59:59`,
-      period: "daily",
-      limit: 100000,
-      rrdId: 0,
-      fields: FIELDS,
-    },
-  );
+  const byId = new Map<string, unknown>();
+  let rrdId = 0;
+  for (;;) {
+    const page = await financeRequest(
+      "https://finance-api.wildberries.ru/api/finance/v1/sales-reports/detailed", apiKey,
+      { dateFrom: `${from}T00:00:00`, dateTo: `${to}T23:59:59`, period: "daily", limit: 100000, rrdId, fields: FIELDS },
+    );
+    for (let i=0; i<page.length; i++) {
+      const id = record(page[i]).rrdId;
+      byId.set(id === undefined ? `single:${i}` : String(id), page[i]);
+    }
+    if (page.length < 100000) break;
+    const next = Number(record(page[page.length-1]).rrdId);
+    if (!Number.isSafeInteger(next) || next <= rrdId) throw new Error('ВБ: курсор финансового отчёта не продвинулся.');
+    rrdId = next;
+  }
+  const rows = [...byId.values()];
+  const currencies = new Set(rows.map(row => record(row).currency).filter(Boolean));
+  if (currencies.size > 1) throw new Error('ВБ: отчёт содержит разные валюты; складывать суммы нельзя.');
 
   const currency = rows.map((row) => record(row)["currency"])
     .find((value): value is string => typeof value === "string") ?? null;
@@ -171,7 +180,7 @@ export async function getWildberriesFinanceReport(
     from,
     to,
     rowsCount: rows.length,
-    incomplete: rows.length >= 100000,
+    incomplete: false,
     totals: aggregateWildberriesFinance(rows),
     soldItems: [...soldItemsByIdentity.values()].filter((item) => item.quantity !== 0),
   };
