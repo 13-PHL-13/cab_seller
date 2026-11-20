@@ -87,7 +87,7 @@ export default function FinancePage() {
         <div className="info-banner" style={{ marginTop: 14 }}>
           <Info size={17} />
           <div>
-            Для Wildberries нужен API-ключ с правами категории «Финансы». Запрос выполняется только по нажатию кнопки, без фонового опроса. Если площадка вернёт ограничение частоты, дождитесь разрешения повторного запроса.
+            Для Wildberries нужен API-ключ с правами категории «Финансы». Данные загружаются в общую базу для всех разделов. Если выгрузка ещё идёт, отчёт появится автоматически. Ограничения площадки учитываются при продолжении загрузки.
           </div>
         </div>
         {error ? <div className="info-banner" role="alert"><AlertTriangle size={17} />{error}</div> : null}
@@ -174,7 +174,7 @@ export default function FinancePage() {
         <div className="info-banner" style={{ marginTop: 14 }}>
           <Info size={17} />
           <div>
-            Ozon отдаёт начисления за один день. Сервер запрашивает даты последовательно и проходит курсорную пагинацию last_id. Не запускайте несколько выгрузок одновременно: частоту запросов ограничивает сам Ozon.
+            Отчёт Ozon загружается по дням. Уже полученные данные сохраняются. При ограничении площадки загрузка продолжится автоматически; повторно нажимать кнопку не нужно.
           </div>
         </div>
         {ozonError ? <div className="info-banner" role="alert"><AlertTriangle size={17} />{ozonError}</div> : null}
