@@ -129,12 +129,12 @@ async function pageFetch(job: Job, connection: MarketplaceConnection, url: strin
   await reserveBudget(budget, policy.interval);
   let response: Response;
   try { response = await fetch(url, { ...init, signal: AbortSignal.timeout(30_000), redirect: 'error' }); }
-  catch { throw new SyncDeferred(Date.now() + 60_000, 'network'); }
+  catch { throw new SyncDeferred(Date.now() + Math.max(60_000,policy.interval), 'network'); }
   if (response.status === 429 || response.status === 408 || response.status >= 500) {
     const retryAt = retryAtFromHeaders(response.headers, Date.now(), response.status === 429 ? policy.interval : 60_000);
-    await pool.query('UPDATE marketplace_sync_budgets SET next_allowed_at=GREATEST(next_allowed_at,$2) WHERE id=$1', [budget, new Date(retryAt)]);
+    const saved = await pool.query('UPDATE marketplace_sync_budgets SET next_allowed_at=GREATEST(next_allowed_at,$2) WHERE id=$1 RETURNING next_allowed_at', [budget, new Date(retryAt)]);
     await response.body?.cancel();
-    throw new SyncDeferred(retryAt, 'provider');
+    throw new SyncDeferred(saved.rows[0].next_allowed_at.getTime(), 'provider');
   }
   if (!response.ok) {
     if (response.status >= 400 && response.status < 500) await pool.query("UPDATE marketplace_sync_budgets SET next_allowed_at=GREATEST(next_allowed_at,now()+$2*interval '1 millisecond') WHERE id=$1", [budget, policy.interval * 10]);

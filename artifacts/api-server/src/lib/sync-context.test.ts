@@ -20,6 +20,7 @@ test('Retry-After HTTP dates and WB duration headers never cause an early retry'
   assert.equal(retryAtFromHeaders(new Headers({ 'Retry-After': 'Fri, 20 Nov 2026 03:00:00 GMT' }), now, 60000), now + 10800000);
   assert.equal(retryAtFromHeaders(new Headers({ 'X-Ratelimit-Reset': '1800' }), now, 60000), now + 1800000);
   assert.equal(retryAtFromHeaders(new Headers({ 'X-Ratelimit-Retry': '3600', 'Retry-After': '1' }), now, 60000), now + 3600000);
+  assert.equal(retryAtFromHeaders(new Headers({ 'X-Ratelimit-Retry': '30', 'Retry-After': '7200' }), now, 60000), now + 7200000);
 });
 test('persisted snapshots restore Map entries and nulls after a process restart', () => {
   const snapshot = { daily: new Map([['2026-11-20', { value: 0, missing: null }]]) };

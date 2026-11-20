@@ -23,16 +23,20 @@ export function providerFetch(url: string, init: RequestInit): Promise<Response>
 }
 
 export function retryAtFromHeaders(headers: Headers, now: number, fallbackMs: number): number {
+  const candidates: number[] = [];
   const seconds = headers.get('X-Ratelimit-Retry');
   if (seconds !== null && seconds.trim() && Number.isFinite(Number(seconds)) && Number(seconds) >= 0) {
-    return now + Math.max(1000, Number(seconds) * 1000);
+    candidates.push(now + Math.max(1000, Number(seconds) * 1000));
   }
   const retry = headers.get('Retry-After');
   if (retry !== null && retry.trim()) {
-    if (Number.isFinite(Number(retry)) && Number(retry) >= 0) return now + Math.max(1000, Number(retry) * 1000);
-    const date = Date.parse(retry);
-    if (Number.isFinite(date)) return Math.max(now + 1000, date);
+    if (Number.isFinite(Number(retry)) && Number(retry) >= 0) candidates.push(now + Math.max(1000, Number(retry) * 1000));
+    else {
+      const date = Date.parse(retry);
+      if (Number.isFinite(date)) candidates.push(Math.max(now + 1000, date));
+    }
   }
+  if (candidates.length) return Math.max(...candidates);
   // WB Reset is a duration, unlike GitHub's epoch timestamp.
   const reset = headers.get('X-Ratelimit-Reset');
   return now + Math.max(fallbackMs, reset && Number.isFinite(Number(reset)) ? Number(reset) * 1000 : 0);
