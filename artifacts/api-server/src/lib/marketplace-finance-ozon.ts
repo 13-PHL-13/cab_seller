@@ -13,10 +13,11 @@ export type OzonFinanceTotals = {
 };
 
 export type OzonFinanceResult = {
-  dailyDashboard?:Array<{date:string}&ReturnType<typeof ozonDashboardFinance>>;
+  dailyDashboard?:Array<{date:string; expenseBreakdown?: OzonExpenseBreakdown}&ReturnType<typeof ozonDashboardFinance>>;
   dashboardVersion?:number;
   dashboardDiagnostics?: ReturnType<typeof ozonAccrualShape>;
   dashboard?: {revenue:number|null;expenses:number|null;commission:number|null;logistics:number|null;other:number|null};
+  expenseBreakdown?: OzonExpenseBreakdown;
   marketplace: "ozon";
   currency: string | null;
   from: string;
@@ -46,6 +47,138 @@ function amount(value: unknown): number | null {
 
 function round(value: number): number {
   return Math.round(value * 100) / 100;
+}
+
+const expenseLabels = {
+  commission: "Вознаграждение Ozon",
+  delivery: "Услуги доставки",
+  partner: "Услуги партнёров",
+  penalties: "Другие услуги и штрафы",
+  adjustments: "Прочие начисления",
+  ads: "Продвижение и реклама",
+  fbo: "Услуги FBO",
+} as const;
+type ExpenseGroup = keyof typeof expenseLabels;
+type AccrualType = { name: string; description: string };
+type ExpenseItem = { label: string; amount: number };
+type ExpenseArticle = ExpenseItem & { key: ExpenseGroup; details: ExpenseItem[] };
+type OzonExpenseBreakdown = {
+  complete: boolean;
+  expenses: number | null;
+  ads: number | null;
+  fbo: number | null;
+  articles: ExpenseArticle[];
+  unclassified: ExpenseItem[];
+};
+
+function classifyAccrual(type: AccrualType | undefined): ExpenseGroup | undefined {
+  if (!type) return undefined;
+  const labels = [type.name, type.description].map(value => value.toLowerCase().replaceAll("ё", "е").trim());
+  const rules: Array<[ExpenseGroup, RegExp]> = [
+    ["ads", /^(продвижение и реклама|оплата за клик|оплата за заказ|оплата за показы|трафареты|вывод в топ|продвижение в поиске|медийная реклама|баллы за отзывы)(?:$|[.:])/u],
+    ["fbo", /^(услуги fbo|размещение товаров на складе ozon|платное размещение|обработка поставки fbo)(?:$|[.:])/u],
+    ["delivery", /^(услуги доставки|логистика|обратная логистика|доставка до места выдачи силами ozon)(?:$|[.:])/u],
+    ["partner", /^(услуги партнеров|эквайринг|услуга эквайринга)(?:$|[.:])/u],
+    ["penalties", /^(другие услуги и штрафы|штраф|штрафы)(?:$|[.:])/u],
+    ["adjustments", /^прочие начисления(?:$|[.:])/u],
+    ["commission", /^вознаграждение ozon(?:$|[.:])/u],
+  ];
+  return rules.find(([, pattern]) => labels.some(label => pattern.test(label)))?.[0];
+}
+
+/** Classify signed amounts without deriving financial categories from the residual. */
+export function ozonExpenseBreakdown(rows: unknown[], types: ReadonlyMap<number, AccrualType>): OzonExpenseBreakdown {
+  const groups = new Map<ExpenseGroup, Map<string, number>>();
+  const unknown = new Map<string, number>();
+  const currencies = new Set<string>();
+  let incomplete = false;
+
+  function cents(value: unknown) {
+    const money = asRecord(value);
+    if (typeof money.currency === "string" && money.currency) currencies.add(money.currency);
+    const parsed = amount(money.amount);
+    return parsed === null ? null : Math.round(parsed * 100);
+  }
+
+  function add(group: ExpenseGroup | undefined, label: string, value: number) {
+    const bucket = group ? groups.get(group) ?? new Map<string, number>() : unknown;
+    bucket.set(label, (bucket.get(label) ?? 0) + value);
+    if (group) groups.set(group, bucket);
+    else incomplete = true;
+  }
+
+  function service(raw: unknown, group?: ExpenseGroup) {
+    const fee = asRecord(raw);
+    const id = typeof fee.type_id === "number" ? fee.type_id : null;
+    const type = id === null ? undefined : types.get(id);
+    const label = [type?.description, type?.name].find(value => value && /[а-яё]/iu.test(value)) ??
+      type?.name ?? (id === null ? "Начисление без типа" : `Тип начисления № ${id}`);
+    const value = cents(fee.accrued);
+    const category = group ?? classifyAccrual(type);
+    return { label, value, category };
+  }
+
+  for (const raw of rows) {
+    const row = asRecord(raw);
+    const total = cents(row.total_amount);
+    if (total === null) incomplete = true;
+    let recorded = 0;
+    if (row.accrued_category === "POSTING") {
+      const products = asArray(asRecord(row.posting).products);
+      if (!products.length) incomplete = true;
+      for (const rawProduct of products) {
+        const product = asRecord(rawProduct);
+        const commission = asRecord(product.commission);
+        if (Object.keys(commission).length) {
+          const sale = cents(commission.sale_amount);
+          const fee = cents(commission.commission);
+          if (sale === null || fee === null) incomplete = true;
+          recorded += (sale ?? 0) + (fee ?? 0);
+          if (fee !== null) add("commission", "Комиссия за продажу", -fee);
+        }
+        const delivery = asRecord(product.delivery);
+        if (!Object.keys(delivery).length) continue;
+        const deliveryTotal = cents(delivery.total_accrued);
+        if (deliveryTotal === null) { incomplete = true; continue; }
+        recorded += deliveryTotal;
+        const details = asArray(delivery.services).map(fee => service(fee, "delivery"));
+        const detailsTotal = details.reduce((sum, fee) => sum + (fee.value ?? 0), 0);
+        if (details.length && details.every(fee => fee.value !== null) && detailsTotal === deliveryTotal) {
+          for (const fee of details) add("delivery", fee.label, -fee.value!);
+        } else if (deliveryTotal !== 0 || details.length) {
+          add("delivery", "Доставка без детализации", -deliveryTotal);
+        }
+      }
+    } else {
+      const fees = row.accrued_category === "NON_ITEM" ? [row.non_item_fee]
+        : row.accrued_category === "ITEM" ? asArray(asRecord(row.item_fees).fees).flatMap(item => asArray(asRecord(item).fees))
+        : row.accrued_category === "CONTAINER_FEES" ? asArray(asRecord(row.container_fees).fees) : [];
+      for (const rawFee of fees) {
+        const fee = service(rawFee);
+        if (fee.value === null) { incomplete = true; continue; }
+        recorded += fee.value;
+        if (fee.value !== 0) add(fee.category, fee.label, -fee.value);
+      }
+    }
+    if (total !== null && recorded !== total) add(undefined, "Начисления без детальной расшифровки", recorded - total);
+  }
+
+  const amountOf = (group: ExpenseGroup) => [...(groups.get(group)?.values() ?? [])].reduce((sum, value) => sum + value, 0);
+  const toItems = (entries: Map<string, number>): ExpenseItem[] =>
+    [...entries].map(([label, value]) => ({ label, amount: value / 100 }));
+  const ordinary = (Object.keys(expenseLabels) as ExpenseGroup[]).filter(key => key !== "ads" && key !== "fbo");
+  if (currencies.size > 1) return { complete: false, expenses: null, ads: null, fbo: null, articles: [], unclassified: [] };
+  const hasOrdinary = ordinary.some(key => groups.has(key));
+  return {
+    complete: !incomplete,
+    expenses: incomplete && !hasOrdinary ? null : ordinary.reduce((sum, key) => sum + amountOf(key), 0) / 100,
+    ads: incomplete && !groups.has("ads") ? null : amountOf("ads") / 100,
+    fbo: incomplete && !groups.has("fbo") ? null : amountOf("fbo") / 100,
+    articles: ordinary.filter(key => groups.has(key)).map(key => ({
+      key, label: expenseLabels[key], amount: amountOf(key) / 100, details: toItems(groups.get(key)!),
+    })),
+    unclassified: toItems(unknown),
+  };
 }
 
 function extractSoldItems(rows: unknown[]) {
@@ -190,10 +323,37 @@ export function ozonAccrualShape(rows:unknown[]){
   return {postingRows,emptyPostings,products,commissions,saleAmounts,scalarSaleAmounts,salePrices,deliveryAmounts};
 }
 
-export function ozonDailyDashboard(rows:unknown[],from:string,to:string){
+export function ozonDailyDashboard(rows:unknown[],from:string,to:string,types?:ReadonlyMap<number,AccrualType>){
   // Do not silently lose undated or out-of-period accruals in a comparison.
   if(rows.some(raw=>{const date=asRecord(raw).date;return typeof date!=='string'||!/^\d{4}-\d{2}-\d{2}$/.test(date)||date<from||date>to;}))return undefined;
-  return datesInRange(from,to).map(date=>({date,...ozonDashboardFinance(rows.filter(raw=>asRecord(raw).date===date))}));
+  return datesInRange(from,to).map(date=>{
+    const dailyRows = rows.filter(raw=>asRecord(raw).date===date);
+    return { date, ...ozonDashboardFinance(dailyRows), ...(types && {expenseBreakdown: ozonExpenseBreakdown(dailyRows,types)}) };
+  });
+}
+
+async function requestOzonAccrualTypes(credentials: { clientId: string; apiKey: string }) {
+  try {
+    const response = await providerFetch("https://api-seller.ozon.ru/v1/finance/accrual/types", {
+      method: "POST",
+      headers: { "Client-Id": credentials.clientId, "Api-Key": credentials.apiKey },
+      signal: AbortSignal.timeout(30_000),
+    });
+    if (!response.ok) return undefined;
+    const payload = asRecord(await response.json());
+    const types = new Map<number, AccrualType>();
+    for (const raw of asArray(payload.accrual_types)) {
+      const type = asRecord(raw);
+      if (typeof type.id === "number" && typeof type.name === "string") {
+        types.set(type.id, { name: type.name, description: typeof type.description === "string" ? type.description : "" });
+      }
+    }
+    return types.size ? types : undefined;
+  } catch (error) {
+    if (error instanceof SyncDeferred) throw error;
+    // Ozon may reject access to the type dictionary while still providing raw totals.
+    return undefined;
+  }
 }
 
 async function requestOzonAccrualDay(
@@ -260,7 +420,7 @@ export async function getOzonFinanceReport(
   to: string,
 ): Promise<OzonFinanceResult> {
   const rows: unknown[] = [];
-
+  const types = await requestOzonAccrualTypes(credentials);
 
   // Ozon explicitly requires sequential requests for its new accrual methods.
   for (const date of datesInRange(from, to)) {
@@ -299,8 +459,9 @@ export async function getOzonFinanceReport(
   return {
     marketplace: "ozon",
     dashboard:ozonDashboardFinance(rows),
-    dailyDashboard:ozonDailyDashboard(rows,from,to),
-    dashboardVersion:7,
+    dailyDashboard:ozonDailyDashboard(rows,from,to,types),
+    dashboardVersion:8,
+    expenseBreakdown:types ? ozonExpenseBreakdown(rows,types) : undefined,
     dashboardDiagnostics:ozonAccrualShape(rows),
     currency,
     from,

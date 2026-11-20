@@ -9,7 +9,7 @@ test('PostgreSQL queue survives restart, shares pages, honours 429 and credentia
   process.env.SESSION_SECRET = 'isolated-sync-test-fixture';
   const { pool } = await import('@workspace/db');
   const { encryptCredentials } = await import('./marketplace-credentials.ts');
-  const { ensureMarketplaceSyncSchema, sharedDataset, startMarketplaceSync, workOne } = await import('./marketplace-sync.ts');
+  const { ensureMarketplaceSyncSchema, sharedDataset, sharedSnapshot, startMarketplaceSync, workOne } = await import('./marketplace-sync.ts');
   const { providerFetch, SyncDeferred } = await import('./sync-context.ts');
   await pool.query(`CREATE TABLE marketplace_connections(id serial PRIMARY KEY,company_id uuid NOT NULL,marketplace text NOT NULL,store_name text NOT NULL,credentials_ciphertext text NOT NULL,last_sync_at timestamptz)`);
   await ensureMarketplaceSyncSchema();
@@ -128,7 +128,7 @@ test('PostgreSQL queue survives restart, shares pages, honours 429 and credentia
     await workOne(planHandlers);
     const oldFinance=await sharedDataset(ozon,'finance',{from:'rollout',to:'rollout'});
     assert.equal(oldFinance.sync.state,'queued');
-    await workOne({...planHandlers,finance:async()=>({value:2,dashboardVersion:7,dashboardDiagnostics:{postingRows:0}})});
+    await workOne({...planHandlers,finance:async()=>({value:2,dashboardVersion:8,dashboardDiagnostics:{postingRows:0}})});
     assert.equal((await sharedDataset(ozon,'finance',{from:'rollout',to:'rollout'})).sync.state,'ready');
     // WB daily history resumes one permitted request at a time, retaining
     // its period totals and successful sales while a later day is deferred.
@@ -154,6 +154,13 @@ test('PostgreSQL queue survives restart, shares pages, honours 429 and credentia
     wbData=dashboardStoreData(await sharedDataset(connection,'snapshot',{from:prior,to:day}),'wildberries');
     assert.ok(wbData.daily.every(p=>p.orders===2&&p.views===10));
     assert.equal(wbCalls,4); // one period, one sales feed, two daily pages
+    const tomorrow = new Date(Date.parse(day) + 86400000).toISOString().slice(0, 10);
+    const shifted = dashboardStoreData(await sharedSnapshot(connection, day, tomorrow), 'wildberries');
+    assert.equal(shifted.totals.orders, null); // older period totals never cross the boundary
+    assert.equal(shifted.daily.find(point => point.date === day)?.orders, 2);
+    assert.equal(shifted.daily.some(point => point.date === tomorrow && point.orders !== null), false);
+    assert.equal(shifted.totals.bought, null);
+    assert.equal(wbCalls, 4); // reading the replacement window does not call WB
 
     // On startup, a failed refresh must not prevent already queued work
     // from running. Jobs whose persisted deadline is in the future still wait.

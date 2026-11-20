@@ -72,6 +72,28 @@ export function metricCoverage(stores: StoreIdentity[], window: DashboardWindow 
 export function metricSum(stores: StoreIdentity[], window: DashboardWindow | undefined, key: DashboardMetric) {
   return completeSum(metricCoverage(stores,window,key).included.map(s=>window?.stores.find(i=>i.id===s.id)?.data.totals[key]));
 }
+
+export function platformPeriodMetric(stores: StoreIdentity[], window: DashboardWindow | undefined, key: DashboardMetric, allowPartial: boolean) {
+  if (!allowPartial || !window || !['views', 'carts', 'orders', 'orderAmount'].includes(key)) {
+    return { value: metricSum(stores, window, key), partial: false };
+  }
+  let partial = false;
+  const values: number[] = [];
+  for (const store of stores) {
+    const data = window.stores.find(item => item.id === store.id)?.data;
+    const total = data?.totals[key];
+    if (typeof total === 'number' && Number.isFinite(total)) {
+      values.push(total);
+      continue;
+    }
+    if (store.marketplace !== 'wildberries') continue;
+    partial = true;
+    const days = data?.daily.map(day => day[key]).filter((value): value is number =>
+      typeof value === 'number' && Number.isFinite(value)) ?? [];
+    if (days.length) values.push(days.reduce((sum, value) => sum + value, 0));
+  }
+  return { value: completeSum(values), partial: partial && values.length > 0 };
+}
 export function sameMetricCohort(stores: StoreIdentity[], current: DashboardWindow | undefined, previous: DashboardWindow | undefined, key: DashboardMetric, daily=false) {
   const ids=(window:DashboardWindow|undefined)=>metricCoverage(stores,window,key,daily).included.map(s=>s.id).sort((a,b)=>a-b).join(',');
   return !!current && !!previous && ids(current)!=='' && ids(current)===ids(previous);

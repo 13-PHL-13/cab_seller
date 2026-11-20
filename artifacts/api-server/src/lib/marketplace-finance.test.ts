@@ -58,7 +58,39 @@ test("ignores missing, malformed and non-finite amounts without producing NaN", 
 });
 
 
-import { aggregateOzonAccruals,ozonDashboardFinance,ozonDailyDashboard } from "./marketplace-finance-ozon.ts";
+import { aggregateOzonAccruals,ozonDashboardFinance,ozonDailyDashboard,ozonExpenseBreakdown } from "./marketplace-finance-ozon.ts";
+
+test("Ozon separates promotion and FBO, reconciles delivery services and retains ordinary charges", () => {
+  const labels = ["Логистика", "Обратная логистика", "Доставка до места выдачи силами Ozon",
+    "Продвижение и реклама", "Услуги FBO", "Услуги партнёров", "Другие услуги и штрафы", "Прочие начисления"];
+  const types = new Map(labels.map((name, index) => [index + 1, { name, description: "" }]));
+  const money = (amount: number) => ({ amount: String(amount), currency: "RUB" });
+  const fee = (id: number, amount: number) => ({ type_id: id, accrued: money(amount) });
+  const nonItem = (id: number, amount: number) => ({
+    accrued_category: "NON_ITEM", total_amount: money(amount), non_item_fee: fee(id, amount),
+  });
+  const posting = {
+    accrued_category: "POSTING", total_amount: money(74722),
+    posting: { products: [{
+      commission: { sale_amount: money(172763), commission: money(-89837) },
+      delivery: { total_accrued: money(-8204), services: [fee(1, -6754), fee(2, -1350), fee(3, -100)] },
+    }] },
+  };
+  const rows = [posting, nonItem(4, -68183), nonItem(5, -14775), nonItem(6, -2122), nonItem(7, -40), nonItem(8, 25750)];
+  const view = ozonExpenseBreakdown(rows, types);
+  assert.ok(view.complete);
+  assert.equal(view.expenses, 74453);
+  assert.equal(view.ads, 68183);
+  assert.equal(view.fbo, 14775);
+  assert.equal((view.expenses ?? 0) + (view.ads ?? 0) + (view.fbo ?? 0), ozonDashboardFinance(rows).expenses);
+  assert.deepEqual(view.articles.find(article => article.key === "delivery")?.details.map(item => item.amount), [6754, 1350, 100]);
+  assert.equal(view.articles.find(article => article.key === "penalties")?.amount, 40);
+  assert.ok(!view.articles.some(article => ["ads", "fbo"].includes(article.key)));
+  const partial = ozonExpenseBreakdown([...rows, nonItem(100, -50)], types);
+  assert.equal(partial.complete, false);
+  assert.equal(partial.expenses, view.expenses);
+  assert.equal(partial.unclassified[0]?.amount, 50);
+});
 
 test('daily accrual projections preserve true empty days and reject undated or out-of-period rows',()=>{
  const rows=[{date:'2026-10-01',accrued_category:'ITEM',total_amount:{amount:'-10',currency:'RUB'}},{date:'2026-10-03',accrued_category:'ITEM',total_amount:{amount:'-20',currency:'RUB'}}];
