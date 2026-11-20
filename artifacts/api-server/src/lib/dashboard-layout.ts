@@ -23,6 +23,7 @@ export function dashboardStoreData(
   const missing=(point:typeof points[number],key:'views'|'carts'|'orders'|'revenue')=>point.missing?.[key] || (snapshot.metricSchemaVersion!==2 && snapshot.unavailable?.[key]);
   const buyoutTotal=(field:'boughtUnits'|'boughtAmount')=>points.length && points.every(point=>typeof point[field]==='number') ? points.reduce((sum,point)=>sum+point[field]!,0) : null;
   return {
+    subscription:snapshot.subscription,
     reasons:{views:snapshot.unavailable?.views??snapshot.unavailable?.funnel,carts:snapshot.unavailable?.carts??snapshot.unavailable?.funnel,orders:snapshot.unavailable?.orders,bought:snapshot.unavailable?.buyouts,boughtAmount:snapshot.unavailable?.buyouts},
     totals: {
       views: snapshot.unavailable?.funnel || snapshot.unavailable?.views ? null : snapshot.funnel.views as number | null,

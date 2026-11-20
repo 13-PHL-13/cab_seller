@@ -1,5 +1,6 @@
 import { providerFetch, SyncDeferred, SyncRejected, syncContext } from './sync-context.ts';
 import { createHash } from "node:crypto";
+import type {OzonSubscription} from './ozon-subscription';
 type OzonCredentials = { clientId: string; apiKey: string };
 type WildberriesCredentials = { apiKey: string };
 
@@ -16,6 +17,7 @@ type DailyPoint = {
 };
 
 export type MarketplaceSnapshot = {
+  subscription?:OzonSubscription;
   metricSchemaVersion?:number;
   daily: Map<string, DailyPoint>;
   funnel: Omit<DailyPoint, "date" | "revenue">;

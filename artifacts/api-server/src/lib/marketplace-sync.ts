@@ -3,10 +3,11 @@ import { pool, type MarketplaceConnection } from '@workspace/db';
 import { decryptCredentials } from './marketplace-credentials';
 import { projectOzonPeriod,type MarketplaceSnapshot } from './marketplace-data';
 import type { OzonBuyouts } from './ozon-buyouts';
+import {metricAccessReason,safeSellerInfo,type OzonSubscription} from './ozon-subscription';
 import { dashboardWindow } from './dashboard-layout';
 import { SyncDeferred, SyncRejected, syncContext, syncPolicy, assertReplaySafe, retryAtFromHeaders, packSyncResult, unpackSyncResult, type SyncContext } from './sync-context';
 
-export type DatasetKind = 'snapshot' | 'finance' | 'catalog' | 'buyouts';
+export type DatasetKind = 'snapshot' | 'finance' | 'catalog' | 'buyouts' | 'subscription';
 type Params = { from?: string; to?: string; sourceVersion?: number };
 type Job = { id: string; connection_id: number; revision: string; kind: DatasetKind; params: Params; generation: Date; lease_token: string; failures: number };
 type Handler = (connection: MarketplaceConnection, params: Params) => Promise<unknown>;
@@ -34,16 +35,18 @@ export async function sharedSnapshot(connection: MarketplaceConnection, from: st
     ? { from: rollingFrom, to: today } : { from, to };
   if(connection.marketplace!=='ozon')return sharedDataset<MarketplaceSnapshot>(connection,'snapshot',range);
   const oldestBuyout=new Date(Date.parse(today)-31*86400000).toISOString().slice(0,10);
-  const [analytic,buyouts]=await Promise.allSettled([
+  const [analytic,buyouts,subscription]=await Promise.allSettled([
     sharedDataset<MarketplaceSnapshot>(connection,'snapshot',range),
     sharedDataset<OzonBuyouts>(connection,'buyouts',{from:oldestBuyout,to:today}),
+    sharedDataset<OzonSubscription>(connection,'subscription',{}),
   ]);
-  if(analytic.status==='rejected' && buyouts.status==='rejected')throw analytic.reason;
+  if(analytic.status==='rejected' && buyouts.status==='rejected' && subscription.status==='rejected')throw analytic.reason;
   const snapshot=analytic.status==='fulfilled' ? analytic.value : {
     daily:new Map(),funnel:{orders:0,units:0,views:0,cartAdds:0},
     unavailable:{orders:'Аналитика заказов Ozon загружается.',revenue:'Аналитика сумм Ozon загружается.',views:'Аналитика просмотров Ozon загружается.',carts:'Аналитика корзин Ozon загружается.'},
-    sync:buyouts.status==='fulfilled'?buyouts.value.sync:undefined!,
+    sync:buyouts.status==='fulfilled'?buyouts.value.sync:subscription.status==='fulfilled'?subscription.value.sync:undefined!,
   } as MarketplaceSnapshot & {sync:SyncStatus};
+  snapshot.subscription=subscription.status==='fulfilled' ? subscription.value : {type:'UNKNOWN',label:subscription.reason instanceof SyncDeferred?'Тариф уточняется':'Не удалось определить тариф',isPremium:null,advancedAnalytics:null,checkedAt:null};
   const projected=projectOzonPeriod(snapshot,from,to);
   snapshot.daily=projected.daily;snapshot.unavailable=projected.unavailable;
   let missingBuyouts=false;
@@ -61,6 +64,14 @@ export async function sharedSnapshot(connection: MarketplaceConnection, from: st
     snapshot.unavailable.buyouts=error instanceof SyncRejected && error.status===403
       ? error.reason==='subscription' ? error.message : 'Ежедневный отчёт выкупов Ozon недоступен (403). Метод требует Premium Plus/Pro и прав API «Финансы».'
       : error instanceof Error ? `Выкупы Ozon: ${error.message}` : 'Ежедневные выкупы Ozon доступны через API за последние 32 календарных дня.';
+  }
+  const knownSubscription=subscription.status==='fulfilled'&&!subscription.value.sync.stale ? subscription.value : undefined;
+  for(const field of ['views','carts'] as const){
+    if(snapshot.unavailable?.[field])snapshot.unavailable[field]=metricAccessReason(knownSubscription,snapshot.unavailable[field]);
+  }
+  if(snapshot.unavailable?.buyouts){
+    const error=buyouts.status==='rejected'?buyouts.reason:null;
+    snapshot.unavailable.buyouts=metricAccessReason(knownSubscription,snapshot.unavailable.buyouts,error instanceof SyncRejected&&error.reason==='subscription');
   }
   snapshot.funnel = [...snapshot.daily.values()].reduce((total, point) => ({
     orders: total.orders+point.orders, units: total.units+(point.boughtUnits??0),
@@ -106,7 +117,7 @@ export async function ensureMarketplaceSyncSchema(): Promise<void> {
 export async function sharedDataset<T>(connection: MarketplaceConnection, kind: DatasetKind, params: Params): Promise<T & { sync: SyncStatus }> {
   const revision = revisionOf(connection.credentialsCiphertext);
   const id = hash(`${connection.companyId}:${connection.id}:${revision}:${kind}:${JSON.stringify(params)}`);
-  const ttl = kind === 'snapshot' ? 2 * 3600_000 : kind === 'finance' ? 12 * 3600_000 : 6 * 3600_000;
+  const ttl = kind==='subscription'?3600_000:kind === 'snapshot' ? 2 * 3600_000 : kind === 'finance' ? 12 * 3600_000 : 6 * 3600_000;
   const { rows } = await pool.query(`
     INSERT INTO marketplace_sync_jobs(id,connection_id,revision,kind,params) VALUES($1,$2,$3,$4,$5)
     ON CONFLICT(id) DO UPDATE SET accessed_at=now(),
@@ -200,8 +211,11 @@ async function pageFetch(job: Job, connection: MarketplaceConnection, url: strin
     const retryAt = retryAtFromHeaders(response.headers, Date.now(), policy.interval);
     await pool.query('UPDATE marketplace_sync_budgets SET next_allowed_at=GREATEST(next_allowed_at,$2) WHERE id=$1', [budget, new Date(retryAt)]);
   }
-  const payload = response.status === 204 ? '' : await response.text();
-  if (response.status !== 204) JSON.parse(payload); // Reject malformed/truncated pages before saving progress.
+  let payload = response.status === 204 ? '' : await response.text();
+  if (response.status !== 204) {
+    const parsed=JSON.parse(payload);
+    if(new URL(url).pathname==='/v1/seller/info')payload=JSON.stringify(safeSellerInfo(parsed));
+  }
   await pool.query(`INSERT INTO marketplace_sync_pages(id,connection_id,revision,payload,status,expires_at) VALUES($1,$2,$3,$4,$5,$6)
     ON CONFLICT(id) DO UPDATE SET payload=EXCLUDED.payload,status=EXCLUDED.status,fetched_at=now(),expires_at=EXCLUDED.expires_at`,
   [pageId, connection.id, job.revision, payload, response.status, new Date(Date.now() + policy.ttl)]);
@@ -237,13 +251,20 @@ export async function workOne(handlers: Handlers): Promise<boolean> {
     }
     connection = { id: raw.id, companyId: raw.company_id, marketplace: raw.marketplace, storeName: raw.store_name, credentialsCiphertext: raw.credentials_ciphertext } as MarketplaceConnection;
     const value = await syncContext.run(context, () => handlers[job.kind](connection!, job.params));
-    const serialized = packSyncResult(value);
     const sourceAt = new Date(context.sourceTimes?.length ? Math.min(...context.sourceTimes) : Date.now());
+    if(job.kind==='subscription'){
+      const subscription=value as OzonSubscription;subscription.checkedAt=sourceAt.toISOString();
+      if(subscription.advancedAnalytics===true){
+        await pool.query(`UPDATE marketplace_sync_pages SET expires_at=now()-interval '1 second' WHERE connection_id=$1 AND revision=$2 AND status>=400 AND NULLIF(payload,'')::jsonb->>'reason'='subscription'`,[connection.id,job.revision]);
+        await pool.query(`UPDATE marketplace_sync_jobs SET state='queued',next_attempt_at=now() WHERE connection_id=$1 AND revision=$2 AND state IN ('waiting','blocked') AND last_error='Ozon: данные не загружены из-за ограничения подписки. Требуется Premium Plus или Premium Pro.'`,[connection.id,job.revision]);
+      }
+    }
+    const serialized = packSyncResult(value);
     if (context.deferredUntil.length && job.kind === 'catalog') throw new SyncDeferred(Math.min(...context.deferredUntil));
     if (context.deferredUntil.length) {
       await pool.query(`UPDATE marketplace_sync_jobs SET partial_result=$3,state='waiting',next_attempt_at=$4,updated_at=CASE WHEN result IS NULL THEN $5 ELSE updated_at END,lease_until=NULL,lease_token=NULL,last_error=NULL WHERE id=$1 AND lease_token=$2`, [job.id, token, serialized, new Date(Math.min(...context.deferredUntil)),sourceAt]);
     } else {
-      const ttl = job.kind === 'snapshot' ? 2 * 3600_000 : job.kind === 'finance' ? 12 * 3600_000 : 6 * 3600_000;
+      const ttl = job.kind==='subscription'?3600_000:job.kind === 'snapshot' ? 2 * 3600_000 : job.kind === 'finance' ? 12 * 3600_000 : 6 * 3600_000;
       await pool.query(`UPDATE marketplace_sync_jobs SET result=$3,partial_result=NULL,state='ready',updated_at=$5,next_attempt_at=$4,lease_until=NULL,lease_token=NULL,failures=0,last_error=NULL WHERE id=$1 AND lease_token=$2`, [job.id, token, serialized, new Date(Math.max(Date.now()+5000, sourceAt.getTime()+ttl)), sourceAt]);
       await pool.query('UPDATE marketplace_connections SET last_sync_at=GREATEST(last_sync_at,$2) WHERE id=$1', [connection.id,sourceAt]);
     }

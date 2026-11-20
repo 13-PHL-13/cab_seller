@@ -20,7 +20,7 @@ test('PostgreSQL queue survives restart, shares pages, honours 429 and credentia
   t.mock.method(globalThis, 'fetch', async () => { calls++; return new Response(JSON.stringify({ value: 7 })); });
   const handlers = {
     snapshot: async () => ({ daily: new Map([['day', await (await providerFetch('https://statistics-api.wildberries.ru/api/v1/supplier/sales?dateFrom=fixture', {})).json()]]) }),
-    finance: async () => ({ value: 1 }), catalog: async () => [], buyouts:async()=>({daily:new Map()}),
+    finance: async () => ({ value: 1 }), catalog: async () => [], buyouts:async()=>({daily:new Map()}),subscription:async()=>({type:"UNKNOWN",isPremium:null,advancedAnalytics:null,label:"Unknown",checkedAt:null}),
   };
   try {
     await assert.rejects(sharedDataset(connection, 'snapshot', { from: 'a', to: 'b' }), SyncDeferred);
@@ -107,5 +107,17 @@ test('PostgreSQL queue survives restart, shares pages, honours 429 and credentia
     await pool.query("UPDATE marketplace_sync_budgets SET request_count=50,request_day=to_char(now() AT TIME ZONE 'UTC','YYYY-MM-DD'),next_allowed_at=now()-interval '1 minute' WHERE request_count>0");
     await sharedDataset(ozon,'snapshot',{from:'quota-2',to:'quota-2'}).catch(()=>{});await workOne(quotaHandlers);
     assert.equal(analyticsCalls,1);
+    // The exact plan comes from seller/info, not from a guessed access error.
+    // Upgrading releases only subscription gates, while the raw seller-info
+    // company/tax/ratings fields never enter the page cache or dataset result.
+    await pool.query("UPDATE marketplace_sync_jobs SET state='waiting',next_attempt_at=now()+interval '6 hours',last_error='Ozon: данные не загружены из-за ограничения подписки. Требуется Premium Plus или Premium Pro.' WHERE connection_id=$1 AND kind='buyouts'",[ozon.id]);
+    const {getOzonSubscription}=await import('./ozon-subscription.ts');
+    const planHandlers={...quotaHandlers,subscription:()=>getOzonSubscription({clientId:'fixture-ozon',apiKey:'fixture'})};
+    t.mock.method(globalThis,'fetch',async()=>new Response(JSON.stringify({company:{inn:'private-company-tax-id',legal_name:'private-company-name'},ratings:[{premium:true}],subscription:{type:'PREMIUM_PLUS',is_premium:true}})));
+    await sharedDataset(ozon,'subscription',{}).catch(()=>{});await workOne(planHandlers);
+    const plan=await sharedDataset<{type:string;advancedAnalytics:boolean;checkedAt:string}>(ozon,'subscription',{});
+    assert.equal(plan.type,'PREMIUM_PLUS');assert.equal(plan.advancedAnalytics,true);assert.ok(plan.checkedAt);
+    assert.ok((await pool.query("SELECT 1 FROM marketplace_sync_jobs WHERE connection_id=$1 AND kind='buyouts' AND state='queued'",[ozon.id])).rowCount);
+    assert.equal((await pool.query("SELECT 1 FROM marketplace_sync_pages WHERE payload LIKE '%private-company%' UNION ALL SELECT 1 FROM marketplace_sync_jobs WHERE result LIKE '%private-company%'")).rowCount,0);
   } finally { await pool.end(); }
 });
