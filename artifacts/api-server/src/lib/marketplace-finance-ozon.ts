@@ -75,12 +75,12 @@ function classifyAccrual(type: AccrualType | undefined): ExpenseGroup | undefine
   if (!type) return undefined;
   const labels = [type.name, type.description].map(value => value.toLowerCase().replaceAll("ё", "е").trim());
   const rules: Array<[ExpenseGroup, RegExp]> = [
-    ["ads", /^(продвижение и реклама|оплата за клик|оплата за заказ|оплата за показы|трафареты|вывод в топ|продвижение в поиске|медийная реклама|баллы за отзывы)(?:$|[.:])/u],
-    ["fbo", /^(услуги fbo|размещение товаров на складе ozon|платное размещение|обработка поставки fbo)(?:$|[.:])/u],
+    ["ads", /^(продвижение и реклама|оплата за клик|оплата за заказ|оплата за показы|трафареты|вывод в топ|продвижение в поиске|медийная реклама|баллы за отзывы|подписка управление отзывами|подписка premium)(?:$|[.:])/u],
+    ["fbo", /^(услуги fbo|размещение товаров на складе ozon|размещение товаров на складах ozon|платное размещение|обработка поставки fbo)(?:$|[.:])/u],
     ["delivery", /^(услуги доставки|логистика|обратная логистика|доставка до места выдачи силами ozon)(?:$|[.:])/u],
-    ["partner", /^(услуги партнеров|эквайринг|услуга эквайринга)(?:$|[.:])/u],
-    ["penalties", /^(другие услуги и штрафы|штраф|штрафы)(?:$|[.:])/u],
-    ["adjustments", /^прочие начисления(?:$|[.:])/u],
+    ["partner", /^(услуги партнеров|эквайринг|услуга эквайринга|доставка до места выдачи|обработка возвратов, отмен и невыкупов партнерами|упаковка товара партнерами)(?:$|[.:])/u],
+    ["penalties", /^(другие услуги и штрафы|штраф|штрафы|обеспечение материалами для упаковки товара)(?:$|[.:])/u],
+    ["adjustments", /^(прочие начисления|аналитика premium)(?:$|[.:])/u],
     ["commission", /^вознаграждение ozon(?:$|[.:])/u],
   ];
   return rules.find(([, pattern]) => labels.some(label => pattern.test(label)))?.[0];
@@ -114,7 +114,9 @@ export function ozonExpenseBreakdown(rows: unknown[], types: ReadonlyMap<number,
     const label = [type?.description, type?.name].find(value => value && /[а-яё]/iu.test(value)) ??
       type?.name ?? (id === null ? "Начисление без типа" : `Тип начисления № ${id}`);
     const value = cents(fee.accrued);
-    const category = group ?? classifyAccrual(type);
+    const classified = classifyAccrual(type);
+    // Some posting-level delivery records are billed by partners in Ozon's report.
+    const category = group === "delivery" && classified === "partner" ? classified : group ?? classified;
     return { label, value, category };
   }
 
@@ -144,7 +146,7 @@ export function ozonExpenseBreakdown(rows: unknown[], types: ReadonlyMap<number,
         const details = asArray(delivery.services).map(fee => service(fee, "delivery"));
         const detailsTotal = details.reduce((sum, fee) => sum + (fee.value ?? 0), 0);
         if (details.length && details.every(fee => fee.value !== null) && detailsTotal === deliveryTotal) {
-          for (const fee of details) add("delivery", fee.label, -fee.value!);
+          for (const fee of details) add(fee.category, fee.label, -fee.value!);
         } else if (deliveryTotal !== 0 || details.length) {
           add("delivery", "Доставка без детализации", -deliveryTotal);
         }
@@ -460,7 +462,7 @@ export async function getOzonFinanceReport(
     marketplace: "ozon",
     dashboard:ozonDashboardFinance(rows),
     dailyDashboard:ozonDailyDashboard(rows,from,to,types),
-    dashboardVersion:8,
+    dashboardVersion:9,
     expenseBreakdown:types ? ozonExpenseBreakdown(rows,types) : undefined,
     dashboardDiagnostics:ozonAccrualShape(rows),
     currency,
