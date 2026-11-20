@@ -20,6 +20,7 @@ export function dashboardStoreData(
 ) {
   const ozon = platform === "ozon";
   const points=[...snapshot.daily.values()];
+  const missing=(point:typeof points[number],key:'views'|'carts'|'orders'|'revenue')=>point.missing?.[key] || (snapshot.metricSchemaVersion!==2 && snapshot.unavailable?.[key]);
   const buyoutTotal=(field:'boughtUnits'|'boughtAmount')=>points.length && points.every(point=>typeof point[field]==='number') ? points.reduce((sum,point)=>sum+point[field]!,0) : null;
   return {
     reasons:{views:snapshot.unavailable?.views??snapshot.unavailable?.funnel,carts:snapshot.unavailable?.carts??snapshot.unavailable?.funnel,orders:snapshot.unavailable?.orders,bought:snapshot.unavailable?.buyouts,boughtAmount:snapshot.unavailable?.buyouts},
@@ -37,11 +38,11 @@ export function dashboardStoreData(
     },
     daily: [...snapshot.daily.values()].map((p) => ({
       date: p.date,
-      views: ozon && !snapshot.unavailable?.views ? p.views : null,
-      carts: ozon && !snapshot.unavailable?.carts ? p.cartAdds : null,
-      orders: ozon && !snapshot.unavailable?.orders ? p.orders : null,
+      views: ozon && !missing(p,'views') ? p.views : null,
+      carts: ozon && !missing(p,'carts') ? p.cartAdds : null,
+      orders: ozon && !missing(p,'orders') ? p.orders : null,
       bought: ozon ? p.boughtUnits??null : p.units,
-      orderAmount: ozon && !snapshot.unavailable?.revenue ? p.revenue : null,
+      orderAmount: ozon && !missing(p,'revenue') ? p.revenue : null,
       boughtAmount: ozon ? p.boughtAmount??null : p.revenue,
     })),
   };

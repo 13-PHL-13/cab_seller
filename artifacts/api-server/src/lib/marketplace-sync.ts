@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { pool, type MarketplaceConnection } from '@workspace/db';
 import { decryptCredentials } from './marketplace-credentials';
-import type { MarketplaceSnapshot } from './marketplace-data';
+import { projectOzonPeriod,type MarketplaceSnapshot } from './marketplace-data';
 import type { OzonBuyouts } from './ozon-buyouts';
 import { dashboardWindow } from './dashboard-layout';
 import { SyncDeferred, SyncRejected, syncContext, syncPolicy, assertReplaySafe, retryAtFromHeaders, packSyncResult, unpackSyncResult, type SyncContext } from './sync-context';
@@ -44,11 +44,12 @@ export async function sharedSnapshot(connection: MarketplaceConnection, from: st
     unavailable:{orders:'Аналитика заказов Ozon загружается.',revenue:'Аналитика сумм Ozon загружается.',views:'Аналитика просмотров Ozon загружается.',carts:'Аналитика корзин Ozon загружается.'},
     sync:buyouts.status==='fulfilled'?buyouts.value.sync:undefined!,
   } as MarketplaceSnapshot & {sync:SyncStatus};
-  snapshot.daily = new Map([...snapshot.daily].filter(([date]) => date >= from && date <= to));
+  const projected=projectOzonPeriod(snapshot,from,to);
+  snapshot.daily=projected.daily;snapshot.unavailable=projected.unavailable;
   let missingBuyouts=false;
   for(let stamp=Date.parse(from);stamp<=Date.parse(to);stamp+=86400000){
     const date=new Date(stamp).toISOString().slice(0,10);
-    const point=snapshot.daily.get(date)??{date,revenue:0,orders:0,units:0,views:0,cartAdds:0};
+    const point=snapshot.daily.get(date)??{date,revenue:0,orders:0,units:0,views:0,cartAdds:0,missing:{views:Boolean(snapshot.unavailable?.views),carts:Boolean(snapshot.unavailable?.carts),orders:Boolean(snapshot.unavailable?.orders),revenue:Boolean(snapshot.unavailable?.revenue)}};
     const realization=buyouts.status==='fulfilled'?buyouts.value.daily.get(date):undefined;
     point.boughtUnits=realization?.units??null;point.boughtAmount=realization?.amount??null;
     if(!realization)missingBuyouts=true;
@@ -95,9 +96,9 @@ export async function ensureMarketplaceSyncSchema(): Promise<void> {
     FROM marketplace_connections c WHERE j.connection_id=c.id AND c.marketplace='ozon'
     AND j.kind='snapshot' AND j.state='blocked'
     AND j.last_error='Площадка отклонила загрузку или вернула неподдерживаемые данные.'`);
-  await pool.query(`UPDATE marketplace_sync_jobs j SET state='queued',next_attempt_at=now(),params=params||'{"sourceVersion":2}'::jsonb
+  await pool.query(`UPDATE marketplace_sync_jobs j SET state='queued',next_attempt_at=now(),params=params||'{"sourceVersion":3}'::jsonb
     FROM marketplace_connections c WHERE j.connection_id=c.id AND c.marketplace='ozon'
-    AND j.kind='snapshot' AND (j.params->>'sourceVersion') IS DISTINCT FROM '2'`);
+    AND j.kind='snapshot' AND (j.params->>'sourceVersion') IS DISTINCT FROM '3'`);
 }
 
 // Callers MUST select the connection through their existing company/store ACL first.
@@ -111,7 +112,7 @@ export async function sharedDataset<T>(connection: MarketplaceConnection, kind: 
     ON CONFLICT(id) DO UPDATE SET accessed_at=now(),
       state=CASE WHEN marketplace_sync_jobs.state='ready' AND marketplace_sync_jobs.next_attempt_at<=now() THEN 'queued' ELSE marketplace_sync_jobs.state END,
       generation=CASE WHEN marketplace_sync_jobs.state='ready' AND marketplace_sync_jobs.next_attempt_at<=now() THEN now() ELSE marketplace_sync_jobs.generation END
-    RETURNING state,result,partial_result,updated_at,next_attempt_at,last_error`, [id, connection.id, revision, kind, connection.marketplace==='ozon' && kind==='snapshot'?{...params,sourceVersion:2}:params]);
+    RETURNING state,result,partial_result,updated_at,next_attempt_at,last_error`, [id, connection.id, revision, kind, connection.marketplace==='ozon' && kind==='snapshot'?{...params,sourceVersion:3}:params]);
   const row = rows[0];
   const value = row.result ?? row.partial_result;
   if (!value) {
