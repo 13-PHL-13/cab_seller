@@ -738,7 +738,7 @@ router.get("/marketplace/dashboard", async (req, res): Promise<void> => {
           if (req.query.layout !== 'prototype' && cooldownUntil > Date.now()) {
             const remainingSeconds = Math.ceil((cooldownUntil - Date.now()) / 1000);
             const wait = remainingSeconds >= 3600 ? `${Math.ceil(remainingSeconds / 3600)} ч.` : remainingSeconds >= 60 ? `${Math.ceil(remainingSeconds / 60)} мин.` : `${remainingSeconds} сек.`;
-            partialErrors.push(`${connection.storeName}: API временно ограничил запросы. Повторите через ${wait}.`);
+            partialErrors.push(`${target === "ozon" ? "Ozon" : "ВБ"} · ${connection.storeName}: API временно ограничил запросы. Повторите через ${wait}.`);
             continue;
           }
           const cacheKey = [companyIdFromRequest(req), target, connection.id, req.query.layout === 'prototype' ? createHash('sha256').update(connection.credentialsCiphertext).digest('hex') : connection.updatedAt.getTime(), from, to].join(":");
@@ -750,7 +750,7 @@ router.get("/marketplace/dashboard", async (req, res): Promise<void> => {
             ? getOzonSnapshot(credentials as { clientId: string; apiKey: string }, from, requestTo)
             : getWildberriesSnapshot(credentials as { apiKey: string }, from, to, req.query.layout === 'prototype'));
           const detail = dashboardStoreData(snapshot,target);
-          for(const warning of Object.values(snapshot.unavailable??{}))partialErrors.push(`${connection.storeName}: ${warning}`);
+          for(const warning of Object.values(snapshot.unavailable??{}))partialErrors.push(`${target === "ozon" ? "Ozon" : "ВБ"} · ${connection.storeName}: ${warning}`);
           if (requestTo !== to) {
             for (const key of Object.keys(detail.totals) as Array<keyof typeof detail.totals>) detail.totals[key] = null;
           }
@@ -778,10 +778,10 @@ router.get("/marketplace/dashboard", async (req, res): Promise<void> => {
               eq(marketplaceConnectionsTable.companyId, companyIdFromRequest(req)),
             ));
             const wait = error.retryAfterSeconds >= 3600 ? `${Math.ceil(error.retryAfterSeconds / 3600)} ч.` : error.retryAfterSeconds >= 60 ? `${Math.ceil(error.retryAfterSeconds / 60)} мин.` : `${error.retryAfterSeconds} сек.`;
-            partialErrors.push(`${connection.storeName}: API временно ограничил запросы (429). Подключение активно; повторите через ${wait}.`);
+            partialErrors.push(`${target === "ozon" ? "Ozon" : "ВБ"} · ${connection.storeName}: API временно ограничил запросы (429). Подключение активно; повторите через ${wait}.`);
           } else {
             req.log.warn({ marketplace: target, storeId: connection.id }, "Marketplace data request failed");
-            partialErrors.push(`${connection.storeName}: ${errorMessage(error)}`);
+            partialErrors.push(`${target === "ozon" ? "Ozon" : "ВБ"} · ${connection.storeName}: ${errorMessage(error)}`);
           }
         }
       }
