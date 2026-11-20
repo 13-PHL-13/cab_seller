@@ -3,7 +3,7 @@ import { Link, Route, Switch, useLocation } from 'wouter';
 import CollaborationProvider, { useCollaboration } from '@/components/CollaborationProvider';
 import ChatsPage, { AiProvider, AiPanel } from '@/components/AiWorkspace';
 import { BarChart3, Filter, LayoutGrid, Menu, Settings, Store, Wallet, Package, UsersRound, ListTodo, Sparkles } from 'lucide-react';
-import { Logo } from '@/components/Logo';
+import { BrandLogo } from '@/components/Logo';
 import DashboardPage from '@/pages/Dashboard';
 import MarketplacesPage from '@/pages/Marketplaces';
 import MarketplaceDetailPage from '@/pages/MarketplaceDetail';
@@ -81,7 +81,7 @@ function Workspace({ children, userEmail, onLogout }: { children: React.ReactNod
   return (
     <div className="app">
       <aside className={`sidebar${open ? ' open' : ''}`}>
-        <div className="brand"><Logo size={36} /><div><div className="brand-name">Навигатор продаж</div><div className="brand-sub">Единый кабинет продавца</div></div></div>
+        <div className="brand brand-approved"><BrandLogo /><div className="brand-sub">Единый кабинет продавца</div></div>
         <nav style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
           {visibleNav.map((item) => { const Icon = item.icon; return <Link key={item.href} href={item.href} className={`nav-item${item.match(location) ? ' active' : ''}`} onClick={() => setOpen(false)}><Icon size={17} />{item.label}{item.href === '/tasks' && <span className="task-count">{receivedCount}</span>}</Link>; })}
         </nav>

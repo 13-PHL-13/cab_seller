@@ -1,10 +1,6 @@
-import brandMark from '@/assets/brand-mark.png';
+import approvedLogo from '@/assets/brand-logo-approved.png';
 
-interface LogoProps {
-  size?: number;
-}
-
-/** Знак «Навигатора продаж» из утверждённого изображения бренда. */
-export function Logo({ size = 34 }: LogoProps) {
-  return <img src={brandMark} width={size} height={size} alt="" aria-hidden="true" style={{ objectFit: 'contain' }} />;
+/** The approved original artwork, with only its surrounding white space clipped. */
+export function BrandLogo({width=208}:{width?:number}){
+ return <img src={approvedLogo} alt="Навигатор продаж" width={width} height={Math.round(width/4.35)} style={{display:'block',width,maxWidth:'100%',height:Math.round(width/4.35),objectFit:'cover',objectPosition:'center',borderRadius:5,background:'#fff'}}/>;
 }
