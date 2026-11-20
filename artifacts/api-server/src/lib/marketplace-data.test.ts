@@ -68,8 +68,37 @@ test('sales 429 retains the funnel and suppresses repeated calls until retry tim
   for(const snapshot of [first,second]){
     const data=dashboardStoreData(snapshot,'wildberries');
     assert.equal(data.totals.views,20);assert.equal(data.totals.bought,null);
-    assert.equal(data.totals.boughtAmount,null);assert.equal(data.daily.length,0);
+    assert.equal(data.totals.boughtAmount,null);assert.ok(data.daily.every(point=>point.bought===null&&point.boughtAmount===null));
   }
+});
+
+test('WB daily funnel uses order dates and sums rather than sales quantities',async(t)=>{
+  t.mock.method(globalThis,'fetch',async(url:string,init?:RequestInit)=>{
+    if(url.includes('/supplier/sales'))return new Response(JSON.stringify([{date:today,saleID:'S1',finishedPrice:80}]));
+    const period=JSON.parse(String(init?.body)).selectedPeriod;
+    const isToday=period.start===today;
+    return new Response(JSON.stringify({data:{products:[{statistics:{selected:{openCount:isToday?30:10,cartCount:4,orderCount:isToday?7:2,orderSum:isToday?700:200,buyoutCount:1}}}]}}));
+  });
+  const snapshot=await getWildberriesSnapshot({apiKey:'daily-test'},yesterday,today,true);
+  const data=dashboardStoreData(snapshot,'wildberries');
+  assert.equal(data.daily.find(p=>p.date===today)?.orders,7);
+  assert.equal(data.daily.find(p=>p.date===today)?.orderAmount,700);
+  assert.equal(data.daily.find(p=>p.date===today)?.bought,1);
+  assert.equal(data.daily.find(p=>p.date===today)?.boughtAmount,80);
+  assert.equal(data.daily.find(p=>p.date===yesterday)?.orders,2);
+});
+
+test('a paused WB day does not fabricate daily zeroes or discard period totals',async(t)=>{
+  t.mock.method(globalThis,'fetch',async(url:string,init?:RequestInit)=>{
+    if(url.includes('/supplier/sales'))return new Response('[]');
+    const period=JSON.parse(String(init?.body)).selectedPeriod;
+    if(period.start===period.end)throw new Error('Дневная воронка загружается');
+    return new Response(JSON.stringify(funnel));
+  });
+  const data=dashboardStoreData(await getWildberriesSnapshot({apiKey:'daily-paused'},yesterday,today,true),'wildberries');
+  assert.equal(data.totals.orders,5);assert.equal(data.totals.views,20);
+  assert.ok(data.daily.every(p=>p.orders===null&&p.views===null&&p.carts===null));
+  assert.equal(data.totals.bought,0);
 });
 
 

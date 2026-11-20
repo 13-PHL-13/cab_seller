@@ -51,6 +51,7 @@ test('PostgreSQL queue survives restart, shares pages, honours 429 and credentia
     await workOne(delayedHandlers);
     assert.ok((await pool.query("SELECT 1 FROM marketplace_sync_budgets WHERE next_allowed_at>now()+interval '2 hours'")).rowCount);
     assert.equal(calls,2);
+    assert.match((await pool.query("SELECT last_error FROM marketplace_sync_jobs WHERE state='waiting' ORDER BY next_attempt_at DESC LIMIT 1")).rows[0].last_error,/HTTP 429/);
     // Rotated credentials cannot read the old result. Updating lastSyncAt can.
     await assert.rejects(sharedDataset({...connection,credentialsCiphertext:encryptCredentials({apiKey:'rotated-fixture'})},'snapshot',{from:'a',to:'b'}),SyncDeferred);
     // A terminal failure in one source must not stop good sources refreshing,
@@ -119,5 +120,29 @@ test('PostgreSQL queue survives restart, shares pages, honours 429 and credentia
     assert.equal(plan.type,'PREMIUM_PLUS');assert.equal(plan.advancedAnalytics,true);assert.ok(plan.checkedAt);
     assert.ok((await pool.query("SELECT 1 FROM marketplace_sync_jobs WHERE connection_id=$1 AND kind='buyouts' AND state='queued'",[ozon.id])).rowCount);
     assert.equal((await pool.query("SELECT 1 FROM marketplace_sync_pages WHERE payload LIKE '%private-company%' UNION ALL SELECT 1 FROM marketplace_sync_jobs WHERE result LIKE '%private-company%'")).rowCount,0);
+    // WB daily history resumes one permitted request at a time, retaining
+    // its period totals and successful sales while a later day is deferred.
+    await pool.query('TRUNCATE marketplace_sync_jobs,marketplace_sync_pages,marketplace_sync_budgets');
+    await pool.query("UPDATE marketplace_connections SET marketplace='wildberries',credentials_ciphertext=$2 WHERE id=$1",[connection.id,ciphertext]);
+    const {getWildberriesSnapshot}=await import('./marketplace-data.ts');
+    const {dashboardStoreData}=await import('./dashboard-layout.ts');
+    const day=new Date().toISOString().slice(0,10),prior=new Date(Date.now()-86400000).toISOString().slice(0,10);
+    let wbCalls=0;
+    t.mock.method(globalThis,'fetch',async(url:string)=>{
+      wbCalls++;
+      return new Response(url.includes('/supplier/sales')?'[]':JSON.stringify({data:{products:[{statistics:{selected:{openCount:10,cartCount:3,orderCount:2,buyoutCount:1,orderSum:200}}}]}}));
+    });
+    const wbHandlers={...handlers,snapshot:()=>getWildberriesSnapshot({apiKey:'fixture'},prior,day,true)};
+    await sharedDataset(connection,'snapshot',{from:prior,to:day}).catch(()=>{});
+    await workOne(wbHandlers);
+    let wbData=dashboardStoreData(await sharedDataset(connection,'snapshot',{from:prior,to:day}),'wildberries');
+    assert.equal(wbData.totals.orders,2);assert.ok(wbData.daily.every(p=>p.orders===null));
+    for(let attempt=0;attempt<2;attempt++){
+      await pool.query("UPDATE marketplace_sync_budgets SET next_allowed_at=now()-interval '1 minute'; UPDATE marketplace_sync_jobs SET next_attempt_at=now()");
+      await workOne(wbHandlers);
+    }
+    wbData=dashboardStoreData(await sharedDataset(connection,'snapshot',{from:prior,to:day}),'wildberries');
+    assert.ok(wbData.daily.every(p=>p.orders===2&&p.views===10));
+    assert.equal(wbCalls,4); // one period, one sales feed, two daily pages
   } finally { await pool.end(); }
 });

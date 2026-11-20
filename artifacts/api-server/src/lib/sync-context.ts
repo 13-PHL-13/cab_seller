@@ -3,8 +3,8 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 export class SyncDeferred extends Error {
   readonly retryAt: number;
   readonly reason: 'budget' | 'provider' | 'network';
-  constructor(retryAt: number, reason: 'budget' | 'provider' | 'network' = 'budget') {
-    super(`Данные загружаются в фоне. Следующая попытка: ${new Date(retryAt).toLocaleString('ru-RU', { timeZone: 'Asia/Yekaterinburg' })}.`);
+  constructor(retryAt: number, reason: 'budget' | 'provider' | 'network' = 'budget', detail?:string) {
+    super(`${detail ? detail+' ' : ''}Данные загружаются в фоне. Следующая попытка: ${new Date(retryAt).toLocaleString('ru-RU', { timeZone: 'Asia/Yekaterinburg' })}.`);
     this.retryAt = retryAt;
     this.reason = reason;
   }
@@ -22,6 +22,7 @@ export class SyncRejected extends Error {
 export type SyncContext = {
   fetch: (url: string, init: RequestInit) => Promise<Response>;
   deferredUntil: number[];
+  deferredMessages?:string[];
   sourceTimes?: number[];
 };
 export const syncContext = new AsyncLocalStorage<SyncContext>();

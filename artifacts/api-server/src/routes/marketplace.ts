@@ -889,8 +889,8 @@ router.get("/marketplace/finance/ozon", async (req, res): Promise<void> => {
     (Date.parse(`${to}T00:00:00.000Z`) - Date.parse(`${from}T00:00:00.000Z`))
       / 86_400_000,
   ) + 1;
-  if (days > 7) {
-    res.status(400).json({ error: "Для последовательной выгрузки Ozon выберите период не более 7 дней." });
+  if (days > 31) {
+    res.status(400).json({ error: "Выберите финансовый период Ozon не более 31 дня." });
     return;
   }
 
@@ -905,6 +905,7 @@ router.get("/marketplace/finance/ozon", async (req, res): Promise<void> => {
     const totalKeys = Object.keys(reports[0]!.totals) as Array<keyof typeof reports[number]["totals"]>;
     const report: typeof reports[number] & { catalogCost: { matchedUnits: number; unmatchedUnits: number; costOfGoods: number } } = {
       ...reports[0]!, sync: mergeSyncStatuses(reports.map(item=>item.sync)), soldItems: reports.flatMap((item) => item.soldItems), productSalesError: reports.find((item) => item.productSalesError)?.productSalesError ?? null, productSalesMetric: reports.some((item) => item.productSalesMetric === "ordered_units") ? "ordered_units" : null, totals: Object.fromEntries(totalKeys.map((key) => [key, reports.reduce((sum, item) => sum + item.totals[key], 0)])) as typeof reports[number]["totals"],
+      dashboard:Object.fromEntries((['revenue','expenses','commission','logistics','other'] as const).map(key=>[key,reports.every(item=>typeof item.dashboard?.[key]==='number')?reports.reduce((sum,item)=>sum+item.dashboard![key]!,0):null])) as NonNullable<typeof reports[number]['dashboard']>,
       catalogCost: { matchedUnits: 0, unmatchedUnits: 0, costOfGoods: 0 },
     };
     const [catalogProducts, marketplaceProducts] = await Promise.all([

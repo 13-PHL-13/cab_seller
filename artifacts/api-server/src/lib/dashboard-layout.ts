@@ -24,27 +24,25 @@ export function dashboardStoreData(
   const buyoutTotal=(field:'boughtUnits'|'boughtAmount')=>points.length && points.every(point=>typeof point[field]==='number') ? points.reduce((sum,point)=>sum+point[field]!,0) : null;
   return {
     subscription:snapshot.subscription,
-    reasons:{views:snapshot.unavailable?.views??snapshot.unavailable?.funnel,carts:snapshot.unavailable?.carts??snapshot.unavailable?.funnel,orders:snapshot.unavailable?.orders,bought:snapshot.unavailable?.buyouts,boughtAmount:snapshot.unavailable?.buyouts},
+    reasons:{views:snapshot.unavailable?.views??snapshot.unavailable?.funnel??snapshot.unavailable?.funnelDays,carts:snapshot.unavailable?.carts??snapshot.unavailable?.funnel??snapshot.unavailable?.funnelDays,orders:snapshot.unavailable?.orders??(!ozon?snapshot.unavailable?.funnel??snapshot.unavailable?.funnelDays:undefined),bought:snapshot.unavailable?.buyouts??snapshot.unavailable?.sales,boughtAmount:snapshot.unavailable?.buyouts??snapshot.unavailable?.sales},
     totals: {
       views: snapshot.unavailable?.funnel || snapshot.unavailable?.views ? null : snapshot.funnel.views as number | null,
       carts: snapshot.unavailable?.funnel || snapshot.unavailable?.carts ? null : snapshot.funnel.cartAdds as number | null,
-      orders: ozon && !snapshot.unavailable?.orders ? snapshot.funnel.orders : null,
+      orders: ozon ? snapshot.unavailable?.orders ? null : snapshot.funnel.orders : snapshot.unavailable?.funnel ? null : snapshot.funnel.orders,
       bought: ozon ? buyoutTotal('boughtUnits') : snapshot.unavailable?.sales ? null : points.reduce((n,p)=>n+p.units,0),
-      orderAmount: ozon && !snapshot.unavailable?.revenue
-        ? [...snapshot.daily.values()].reduce((n, p) => n + p.revenue, 0)
-        : null,
+      orderAmount: ozon ? snapshot.unavailable?.revenue ? null : points.reduce((n,p)=>n+p.revenue,0) : snapshot.unavailable?.funnel ? null : snapshot.orderAmount??null,
       boughtAmount: ozon ? buyoutTotal('boughtAmount') : snapshot.unavailable?.sales
         ? null
         : [...snapshot.daily.values()].reduce((n, p) => n + p.revenue, 0),
     },
     daily: [...snapshot.daily.values()].map((p) => ({
       date: p.date,
-      views: ozon && !missing(p,'views') ? p.views : null,
-      carts: ozon && !missing(p,'carts') ? p.cartAdds : null,
-      orders: ozon && !missing(p,'orders') ? p.orders : null,
-      bought: ozon ? p.boughtUnits??null : p.units,
-      orderAmount: ozon && !missing(p,'revenue') ? p.revenue : null,
-      boughtAmount: ozon ? p.boughtAmount??null : p.revenue,
+      views: (ozon||snapshot.wbDailyFunnel) && !missing(p,'views') ? p.views : null,
+      carts: (ozon||snapshot.wbDailyFunnel) && !missing(p,'carts') ? p.cartAdds : null,
+      orders: (ozon||snapshot.wbDailyFunnel) && !missing(p,'orders') ? p.orders : null,
+      bought: ozon ? p.boughtUnits??null : snapshot.unavailable?.sales ? null : p.units,
+      orderAmount: ozon ? !missing(p,'revenue') ? p.revenue : null : p.orderAmount??null,
+      boughtAmount: ozon ? p.boughtAmount??null : snapshot.unavailable?.sales ? null : p.revenue,
     })),
   };
 }

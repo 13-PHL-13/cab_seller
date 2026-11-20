@@ -110,6 +110,11 @@ export async function ensureMarketplaceSyncSchema(): Promise<void> {
   await pool.query(`UPDATE marketplace_sync_jobs j SET state='queued',next_attempt_at=now(),params=params||'{"sourceVersion":3}'::jsonb
     FROM marketplace_connections c WHERE j.connection_id=c.id AND c.marketplace='ozon'
     AND j.kind='snapshot' AND (j.params->>'sourceVersion') IS DISTINCT FROM '3'`);
+  // Rebuild derived results from retained raw pages; do not reset provider budgets.
+  await pool.query(`UPDATE marketplace_sync_jobs j SET state='queued',next_attempt_at=now(),params=params||'{"sourceVersion":4}'::jsonb
+    FROM marketplace_connections c WHERE j.connection_id=c.id AND
+    ((c.marketplace='wildberries' AND j.kind='snapshot') OR (c.marketplace='ozon' AND j.kind='finance'))
+    AND (j.params->>'sourceVersion') IS DISTINCT FROM '4'`);
 }
 
 // Callers MUST select the connection through their existing company/store ACL first.
@@ -133,7 +138,8 @@ export async function sharedDataset<T>(connection: MarketplaceConnection, kind: 
       if(row.last_error==='Ozon: данные не загружены из-за ограничения подписки. Требуется Premium Plus или Premium Pro.')throw new SyncRejected(403,'subscription');
       throw new Error(row.last_error??'Не удалось завершить выгрузку: нужна проверка ответа площадки и прав ключа.');
     }
-    throw new SyncDeferred(Math.max(Date.now() + 5000, new Date(row.next_attempt_at).getTime()));
+    const detail=row.last_error?.split('Данные загружаются в фоне.')[0].trim();
+    throw new SyncDeferred(Math.max(Date.now() + 5000, new Date(row.next_attempt_at).getTime()),'budget',detail);
   }
   const result = unpackSyncResult<T>(value);
   return Object.assign(result as object, { sync: {
@@ -183,15 +189,16 @@ async function pageFetch(job: Job, connection: MarketplaceConnection, url: strin
     return new Response(cached.rows[0].status === 204 ? null : cached.rows[0].payload, { status: cached.rows[0].status, headers: { 'Content-Type': 'application/json' } });
   }
   const budget = hash(`${budgetScope(connection)}:${policy.group}`);
-  await reserveBudget(budget, policy.interval,policy.group==='ozon:analytics'?50:undefined);
+  try {await reserveBudget(budget, policy.interval,policy.group==='ozon:analytics'?50:undefined);}
+  catch(error){if(error instanceof SyncDeferred)throw new SyncDeferred(error.retryAt,'budget',`Пауза общего загрузчика: ${policy.group}. Соблюдаем лимит запросов.`);throw error;}
   let response: Response;
   try { response = await fetch(url, { ...init, signal: AbortSignal.timeout(30_000), redirect: 'error' }); }
-  catch { throw new SyncDeferred(Date.now() + Math.max(60_000,policy.interval), 'network'); }
+  catch { throw new SyncDeferred(Date.now() + Math.max(60_000,policy.interval), 'network',`Нет ответа от ${new URL(url).hostname}.`); }
   if (response.status === 429 || response.status === 408 || response.status >= 500) {
     const retryAt = retryAtFromHeaders(response.headers, Date.now(), response.status === 429 ? policy.interval : 60_000);
     const saved = await pool.query('UPDATE marketplace_sync_budgets SET next_allowed_at=GREATEST(next_allowed_at,$2) WHERE id=$1 RETURNING next_allowed_at', [budget, new Date(retryAt)]);
     await response.body?.cancel();
-    throw new SyncDeferred(saved.rows[0].next_allowed_at.getTime(), 'provider');
+    throw new SyncDeferred(saved.rows[0].next_allowed_at.getTime(), 'provider',`Площадка вернула HTTP ${response.status}: ${policy.group}.`);
   }
   if (!response.ok) {
     const responseText=await response.text();
@@ -235,10 +242,11 @@ export async function workOne(handlers: Handlers): Promise<boolean> {
   heartbeat.unref();
   const context: SyncContext = {
     deferredUntil: [],
+    deferredMessages:[],
     sourceTimes: [],
     fetch: async (url, init) => {
       try { return await pageFetch(job, connection!, url, init); }
-      catch (error) { if (error instanceof SyncDeferred) context.deferredUntil.push(error.retryAt); throw error; }
+      catch (error) { if (error instanceof SyncDeferred) {context.deferredUntil.push(error.retryAt);context.deferredMessages?.push(error.message);} throw error; }
     },
   };
   let connection: MarketplaceConnection | undefined;
@@ -262,7 +270,7 @@ export async function workOne(handlers: Handlers): Promise<boolean> {
     const serialized = packSyncResult(value);
     if (context.deferredUntil.length && job.kind === 'catalog') throw new SyncDeferred(Math.min(...context.deferredUntil));
     if (context.deferredUntil.length) {
-      await pool.query(`UPDATE marketplace_sync_jobs SET partial_result=$3,state='waiting',next_attempt_at=$4,updated_at=CASE WHEN result IS NULL THEN $5 ELSE updated_at END,lease_until=NULL,lease_token=NULL,last_error=NULL WHERE id=$1 AND lease_token=$2`, [job.id, token, serialized, new Date(Math.min(...context.deferredUntil)),sourceAt]);
+      await pool.query(`UPDATE marketplace_sync_jobs SET partial_result=$3,state='waiting',next_attempt_at=$4,updated_at=CASE WHEN result IS NULL THEN $5 ELSE updated_at END,lease_until=NULL,lease_token=NULL,last_error=$6 WHERE id=$1 AND lease_token=$2`, [job.id, token, serialized, new Date(Math.min(...context.deferredUntil)),sourceAt,context.deferredMessages?.at(-1)??null]);
     } else {
       const ttl = job.kind==='subscription'?3600_000:job.kind === 'snapshot' ? 2 * 3600_000 : job.kind === 'finance' ? 12 * 3600_000 : 6 * 3600_000;
       await pool.query(`UPDATE marketplace_sync_jobs SET result=$3,partial_result=NULL,state='ready',updated_at=$5,next_attempt_at=$4,lease_until=NULL,lease_token=NULL,failures=0,last_error=NULL WHERE id=$1 AND lease_token=$2`, [job.id, token, serialized, new Date(Math.max(Date.now()+5000, sourceAt.getTime()+ttl)), sourceAt]);
@@ -276,7 +284,7 @@ export async function workOne(handlers: Handlers): Promise<boolean> {
     console.warn('Marketplace dataset deferred or blocked', { connectionId: job.connection_id, kind: job.kind, deferred, failures });
     await pool.query(`UPDATE marketplace_sync_jobs SET state=$3,next_attempt_at=$4,lease_until=NULL,lease_token=NULL,failures=$5,last_error=$6 WHERE id=$1 AND lease_token=$2`,
       [job.id, token, deferred ? 'waiting' : 'blocked', new Date(Math.max(retryAt, failures > 8 ? Date.now() + 24 * 3600_000 : 0)), failures,
-        subscription ? error.message : deferred ? 'Ожидание доступного интервала площадки.' : error instanceof SyncRejected ? error.message : error instanceof Error && /^(Ozon|ВБ):/.test(error.message) ? error.message : 'Не удалось обработать ответ площадки.']);
+        subscription ? error.message : deferred ? context.deferredMessages?.at(-1)??(error instanceof SyncDeferred?error.message:'Ожидание доступного интервала площадки.') : error instanceof SyncRejected ? error.message : error instanceof Error && /^(Ozon|ВБ):/.test(error.message) ? error.message : 'Не удалось обработать ответ площадки.']);
   } finally { clearInterval(heartbeat); }
   return true;
 }

@@ -1,6 +1,6 @@
 import {providerFetch} from './sync-context.ts';
 
-export const PREMIUM_REQUIRED='Требуется Премиум на Озон';
+export const PREMIUM_REQUIRED='Требуется Premium Plus/Pro';
 export type OzonSubscription={type:string;label:string;isPremium:boolean|null;advancedAnalytics:boolean|null;checkedAt:string|null};
 const tiers:Record<string,{label:string;advanced:boolean}>={
   UNSPECIFIED:{label:'Без Премиум',advanced:false},

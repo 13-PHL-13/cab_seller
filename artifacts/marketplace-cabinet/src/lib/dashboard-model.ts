@@ -39,6 +39,17 @@ export function completeSum(
     : null;
 }
 type StoreIdentity = {id:number;storeName:string;marketplace:string};
+/** One coherent set of stores supplies every line of a combined chart. */
+export function chartCoverage<T extends StoreIdentity>(stores:T[],window:DashboardWindow|undefined,metrics:DashboardMetric[]) {
+  const dates=window?calendarDays(window.from,window.to):[];
+  const included=stores.filter(store=>{
+    const data=window?.stores.find(item=>item.id===store.id)?.data;
+    return !!data&&dates.length>0&&metrics.every(key=>typeof data.totals[key]==='number'&&Number.isFinite(data.totals[key])&&dates.every(date=>{
+      const value=data.daily.find(point=>point.date===date)?.[key];return typeof value==='number'&&Number.isFinite(value);
+    }));
+  });
+  return {included,excluded:stores.filter(store=>!included.some(item=>item.id===store.id))};
+}
 /** A missing source is excluded explicitly; an unknown value never becomes zero. */
 export function metricCoverage(stores: StoreIdentity[], window: DashboardWindow | undefined, key: DashboardMetric, daily=false) {
   const included=stores.filter(store=>{
