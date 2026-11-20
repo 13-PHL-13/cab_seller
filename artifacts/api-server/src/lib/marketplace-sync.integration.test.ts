@@ -120,6 +120,14 @@ test('PostgreSQL queue survives restart, shares pages, honours 429 and credentia
     assert.equal(plan.type,'PREMIUM_PLUS');assert.equal(plan.advancedAnalytics,true);assert.ok(plan.checkedAt);
     assert.ok((await pool.query("SELECT 1 FROM marketplace_sync_jobs WHERE connection_id=$1 AND kind='buyouts' AND state='queued'",[ozon.id])).rowCount);
     assert.equal((await pool.query("SELECT 1 FROM marketplace_sync_pages WHERE payload LIKE '%private-company%' UNION ALL SELECT 1 FROM marketplace_sync_jobs WHERE result LIKE '%private-company%'")).rowCount,0);
+    // A previous deployment worker cannot leave an old finance result marked
+    // ready after the new schema migration (zero-downtime deployment overlap).
+    await sharedDataset(ozon,'finance',{from:'rollout',to:'rollout'}).catch(()=>{});
+    await workOne(planHandlers);
+    const oldFinance=await sharedDataset(ozon,'finance',{from:'rollout',to:'rollout'});
+    assert.equal(oldFinance.sync.state,'queued');
+    await workOne({...planHandlers,finance:async()=>({value:2,dashboardDiagnostics:{postingRows:0}})});
+    assert.equal((await sharedDataset(ozon,'finance',{from:'rollout',to:'rollout'})).sync.state,'ready');
     // WB daily history resumes one permitted request at a time, retaining
     // its period totals and successful sales while a later day is deferred.
     await pool.query('TRUNCATE marketplace_sync_jobs,marketplace_sync_pages,marketplace_sync_budgets');
