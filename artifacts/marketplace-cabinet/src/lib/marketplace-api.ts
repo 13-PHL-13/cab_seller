@@ -195,9 +195,20 @@ export function getWildberriesFinanceReport(
 }
 
 
+type OzonExpenseItem = { label: string; amount: number };
+export type OzonExpenseBreakdown = {
+  complete: boolean;
+  expenses: number | null;
+  ads: number | null;
+  fbo: number | null;
+  articles: Array<OzonExpenseItem & { key: string; details: OzonExpenseItem[] }>;
+  unclassified: OzonExpenseItem[];
+};
+
 export interface OzonFinanceReport {
-  dailyDashboard?:Array<{date:string;revenue:number|null;expenses:number|null;commission:number|null;logistics:number|null;other:number|null}>;
+  dailyDashboard?:Array<{date:string;revenue:number|null;expenses:number|null;commission:number|null;logistics:number|null;other:number|null;expenseBreakdown?:OzonExpenseBreakdown}>;
   dashboard?:{revenue:number|null;expenses:number|null;commission:number|null;logistics:number|null;other:number|null};
+  expenseBreakdown?: OzonExpenseBreakdown;
   marketplace: "ozon";
   currency: string | null;
   from: string;

@@ -2,6 +2,18 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { completeSum,change,calendarDays,metricCoverage,metricSum,sameMetricCohort,chartCoverage,dailyMetricSum,sameDailyMetricCohort } from '../src/lib/dashboard-model.ts';
 import {previousFinancePeriod,financePeriodAmounts,financeComparisonBaseline} from '../src/lib/finance-comparison.ts';
+import { platformPeriodMetric } from '../src/lib/dashboard-model.ts';
+
+test('WB shows saved days as partial without replacing official totals or filling missing days', () => {
+ const [store] = [{ id: 1, storeName: 'WB', marketplace: 'wildberries' }];
+ const window = { from: '2026-11-20', to: '2026-11-22', stores: [{
+   ...store, data: { totals: { orders: null }, daily: [{date: '2026-11-20', orders: 3}, {date: '2026-11-21', orders: 0}, {date: '2026-11-22', orders: null}] },
+ }] };
+ assert.deepEqual(platformPeriodMetric([store], window, 'orders', true), { value: 3, partial: true });
+ assert.deepEqual(platformPeriodMetric([store], window, 'orders', false), { value: null, partial: false });
+ window.stores[0].data.totals.orders = 5;
+ assert.deepEqual(platformPeriodMetric([store], window, 'orders', true), { value: 5, partial: false });
+});
 
 test('monthly finance compares matched elapsed days including year boundaries and shorter months',()=>{
  assert.deepEqual(previousFinancePeriod('2026-11-20'),{from:'2026-10-01',to:'2026-10-20',sourceTo:'2026-10-31',comparable:true});

@@ -106,3 +106,12 @@
 .prototype-dashboard .store-panel .waterfall-value{font-size:12px}
 .prototype-dashboard .store-panel .waterfall-label{font-size:11px}
 .prototype-dashboard .store-panel .waterfall-axis{font-size:11px}
+.prototype-dashboard .ozon-expense-summary{display:block;cursor:pointer}
+.prototype-dashboard .ozon-expense-summary::-webkit-details-marker{display:none}
+.prototype-dashboard .ozon-expense-summary:focus-visible{outline:2px solid #338dbe;outline-offset:3px}
+.prototype-dashboard .ozon-expense-summary .expense-progress{display:block}
+.prototype-dashboard .ozon-expense-label{display:inline-flex;align-items:baseline;gap:6px}
+.prototype-dashboard .ozon-expense-label>svg{align-self:center;flex:none}
+.prototype-dashboard .ozon-expense-article[open] .ozon-expense-label>svg{transform:rotate(180deg)}
+.prototype-dashboard .ozon-expense-items{list-style:none;margin:10px 0 0;padding:0 0 0 20px}
+.prototype-dashboard .ozon-expense-items>li{display:flex;align-items:baseline;justify-content:space-between;gap:8px 16px;flex-wrap:wrap;padding:5px 0}

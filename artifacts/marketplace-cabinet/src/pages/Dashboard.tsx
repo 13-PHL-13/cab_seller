@@ -13,6 +13,7 @@ import {
   type MarketplaceStore,
   type WildberriesFinanceReport,
   type OzonFinanceReport,
+  type OzonExpenseBreakdown,
   type SellerExpensesReport,
 } from "@/lib/marketplace-api";
 import { workspaceRequest as request } from "@/lib/collaboration-api";
@@ -26,6 +27,7 @@ import {
   dailyMetricSum,
   sameDailyMetricCohort,
   metricSum,
+  platformPeriodMetric,
   sameMetricCohort,
   calendarDays,
   money,
@@ -222,6 +224,7 @@ function Summary({
         const metric = key as DashboardMetric,
           amount = key.includes("Amount") || key === "margin",
           formatter = amount ? money : quantity;
+        const period = platformPeriodMetric(stores, window, metric, partial);
         return (
           <div className="commerce-metric" key={key}>
             <span className="metric-caption">{label}</span>
@@ -230,12 +233,12 @@ function Summary({
                 <span>2 недели</span>
                 <span>
                   <strong>
-                    {formatter(sumMetric(stores, window, metric))}
+                    {formatter(period.value)}
                   </strong>{" "}
-                  <Change
+                  {period.partial ? <small>По доступным дням</small> : <Change
                     value={sumMetric(stores, window, metric)}
                     previous={sameMetricCohort(stores,window,previous,metric) ? sumMetric(stores, previous, metric) : null}
-                  />
+                  />}
                 </span>
               </div>
               <div>
@@ -892,7 +895,9 @@ export default function DashboardPage() {
             ["orders", "Заказали"],
             ["bought", "Выкупили"],
           ] as const
-        ).map(([key, label]) => (
+        ).map(([key, label]) => {
+          const period = platformPeriodMetric(own, chosen, key, !coherent);
+          return (
           <span className="legend-item" key={key}>
             <span className={"stage-dot " + key} />
             {label}
@@ -901,11 +906,11 @@ export default function DashboardPage() {
               <div>
                 <span>2 недели</span>
                 <span>
-                  <strong>{quantity(sumMetric(own, chosen, key))}</strong>{" "}
-                  <Change
+                  <strong>{quantity(period.value)}</strong>{" "}
+                  {period.partial ? <small>По доступным дням</small> : <Change
                     value={sumMetric(own, chosen, key)}
                     previous={sameMetricCohort(own,chosen,previous,key) ? sumMetric(own, previous, key) : null}
-                  />
+                  />}
                 </span>
               </div>
               <div>
@@ -921,7 +926,8 @@ export default function DashboardPage() {
               </div>
             </div>
           </span>
-        ))}
+          );
+        })}
       </div>
     );
   }
@@ -1338,14 +1344,14 @@ export default function DashboardPage() {
               {selected.map((s) => {
                 const finance = finances[s.id] ?? blankFinance(),
                   report = reports[s.id],
-                  ozon=ozonReports[s.id]?.dashboard,
-                  previousDetails = financePrevious.comparable ? financePeriodAmounts(previousOzonReports[s.id], financePrevious.from, financePrevious.to) : undefined,
+                  isOzon = s.marketplace === "ozon",
+                  ozonBreakdown = ozonReports[s.id]?.expenseBreakdown,
                   expenses = [
-                    ["Комиссия", ozon?.commission??report?.totals.marketplaceReward, previousDetails?.commission],
-                    ["Логистика", ozon?.logistics??report?.totals.delivery, previousDetails?.logistics],
+                    ["Комиссия", report?.totals.marketplaceReward],
+                    ["Логистика", report?.totals.delivery],
                     [
                       "Услуги",
-                      ozon ? null : report
+                      report
                         ? completeSum([
                             report.totals.storage,
                             report.totals.acceptance,
@@ -1354,14 +1360,13 @@ export default function DashboardPage() {
                         : null,
                     ],
                     [
-                      ozon ? "Нерасшифрованные начисления" : "Прочее",
-                      ozon ? ozon.other : report
+                      "Прочее",
+                      report
                         ? completeSum([
                             report.totals.penalties,
                             report.totals.deductions,
                           ])
                         : null,
-                      previousDetails?.other,
                     ],
                   ] as const;
                 return (
@@ -1381,14 +1386,14 @@ export default function DashboardPage() {
                         title="Из чего складывается выручка"
                         stores={[s]}
                         period={companyMonth + " — " + today}
-                        sourceData={finance}
+                        sourceData={isOzon ? { ...finance, expenses: ozonBreakdown?.expenses ?? null, ads: ozonBreakdown?.ads ?? null, extra: null, fbo: ozonBreakdown?.fbo ?? null } : finance}
                         small
                       >
                         <p className="store-revenue">
                           Выручка: <FinanceValue value={finance.revenue} />
                           <Change value={finance.revenue} previous={financeBaseline([s],'revenue')} title={financeComparisonTitle} />
                         </p>
-                        <Waterfall finance={finance} name={s.storeName} />
+                        <Waterfall finance={finance} name={s.storeName} isOzon={isOzon} breakdown={ozonBreakdown} />
                         <div className="profitability">
                           <span>Рентабельность</span>
                           {finance.profitability === null ? <strong>Не рассчитана</strong> : <FinanceValue value={finance.profitability} percent />}
@@ -1400,16 +1405,25 @@ export default function DashboardPage() {
                         stores={[s]}
                         period={companyMonth + " — " + today}
                         sourceData={{
-                          expenses: finance.expenses,
-                          items: expenses,
+                          expenses: isOzon ? ozonBreakdown?.expenses : finance.expenses,
+                          items: isOzon ? ozonBreakdown?.articles : expenses,
                         }}
                         small
                       >
+                        {isOzon ? (
+                          <OzonExpenseDetails
+                            breakdown={ozonBreakdown}
+                            previous={financePrevious.comparable ? previousOzonReports[s.id] : undefined}
+                            from={financePrevious.from}
+                            to={financePrevious.to}
+                            comparisonTitle={financeComparisonTitle}
+                          />
+                        ) : <>
                         <div className="expenses-total">
                           <FinanceValue value={finance.expenses} />
                           {change(finance.expenses, financeBaseline([s], "expenses")) !== null && <Change value={finance.expenses} previous={financeBaseline([s], "expenses")} inverse title={financeComparisonTitle} />}
                         </div>
-                        {expenses.map(([label, raw, previous]) => {
+                        {expenses.map(([label, raw]) => {
                           const value = raw ?? null,
                             share =
                               value !== null &&
@@ -1423,7 +1437,6 @@ export default function DashboardPage() {
                                 <span>{label}</span>
                                 <span className="expense-amount">
                                   <FinanceValue value={value} />
-                                  {change(value, previous ?? null) !== null && <Change value={value} previous={previous ?? null} inverse title={financeComparisonTitle} />}
                                   {share !== null && <small>
                                     Доля{" "}
                                     {share.toLocaleString("ru-RU", {
@@ -1436,10 +1449,10 @@ export default function DashboardPage() {
                                 <span style={{ width: Math.max(0, Math.min(100, share)) + "%", background: platformColor(s.marketplace) }} />
                               </div>}
                               {label === "Логистика" && <p className="store-finance-note">Разбивка доставок, отмен и возвратов пока не загружена.</p>}
-                              {ozon && label === "Нерасшифрованные начисления" && <p className="store-finance-note">Расшифровка по видам услуг пока не подключена.</p>}
                             </div>
                           );
                         })}
+                        </>}
                       </Block>
                     </div>
                   </article>
@@ -1471,11 +1484,61 @@ export default function DashboardPage() {
     </div>
   );
 }
-function Waterfall({ finance, name }: { finance: Finance; name: string }) {
+function OzonExpenseDetails({ breakdown, previous, from, to, comparisonTitle }: {
+  breakdown?: OzonExpenseBreakdown;
+  previous?: OzonFinanceReport;
+  from: string;
+  to: string;
+  comparisonTitle: string;
+}) {
+  if (!breakdown) return <p className="store-finance-note">Расшифровка начислений Ozon пока недоступна.</p>;
+  const amount = breakdown.expenses;
+  const priorDays = calendarDays(from, to).map(date =>
+    previous?.dailyDashboard?.find(day => day.date === date)?.expenseBreakdown);
+  const previousExpense = completeSum(priorDays.map(day => day?.complete ? day.expenses : null));
+  return <>
+    <div className="expenses-total">
+      <FinanceValue value={amount} />
+      {breakdown.complete && change(amount, previousExpense) !== null && <Change value={amount} previous={previousExpense} inverse title={comparisonTitle} />}
+      {!breakdown.complete && amount !== null && <small>По подтверждённым начислениям</small>}
+    </div>
+    {breakdown.articles.map(article => {
+      const prior = completeSum(priorDays.map(day =>
+        !day?.complete ? null : day.articles.find(entry => entry.key === article.key)?.amount ?? 0));
+      const share = breakdown.complete && amount !== null && amount > 0 ? article.amount / amount * 100 : null;
+      return <details className="expense-item ozon-expense-article" key={article.key}>
+        <summary className="ozon-expense-summary">
+          <span className="expense-line">
+          <span className="ozon-expense-label"><ChevronDown size={14} aria-hidden="true" />{article.label}</span>
+          <span className="expense-amount">
+            <FinanceValue value={article.amount} />
+            {breakdown.complete && change(article.amount, prior) !== null && <Change value={article.amount} previous={prior} inverse title={comparisonTitle} />}
+            {share !== null && <small>Доля {share.toLocaleString("ru-RU", { maximumFractionDigits: 1 })}%</small>}
+          </span>
+          </span>
+          {share !== null && share > 0 && <span className="expense-progress">
+            <span style={{ width: Math.min(100, share) + "%", background: platformColor("ozon") }} />
+          </span>}
+        </summary>
+        <ul className="ozon-expense-items">
+          {article.details.map(item => <li key={item.label}><span>{item.label}</span><FinanceValue value={item.amount} /></li>)}
+        </ul>
+      </details>;
+    })}
+    {!breakdown.complete && <p className="store-finance-note">Для полного итога нужна сверка начислений Ozon.</p>}
+    {breakdown.complete && amount === 0 && !breakdown.articles.length && <p className="store-finance-note">За этот период расходов нет.</p>}
+  </>;
+}
+
+function Waterfall({ finance, name, isOzon, breakdown }: {
+  finance: Finance; name: string; isOzon: boolean; breakdown?: OzonExpenseBreakdown;
+}) {
   const rows: [string, number | null][] = [
     ["Выручка", finance.revenue], ["Себестоимость", finance.cost],
-    ["Расходы", finance.expenses], ["Реклама", finance.ads],
-    ["Доп. расходы", finance.extra], ["Маржа", finance.margin],
+    ["Расходы", isOzon ? breakdown?.expenses ?? null : finance.expenses],
+    ["Реклама", isOzon ? breakdown?.ads ?? null : finance.ads],
+    [isOzon ? "Услуги FBO" : "Доп. расходы", isOzon ? breakdown?.fbo ?? null : finance.extra],
+    ["Маржа", finance.margin],
   ];
   const bars = storeFinanceBars(rows.map(([, value]) => value));
   const low = Math.min(0, ...bars.map(bar => bar.to));
@@ -1485,8 +1548,10 @@ function Waterfall({ finance, name }: { finance: Finance; name: string }) {
   const incomplete = bars.some(bar => bar.value === null);
   return <>
     <p className="store-finance-note">{incomplete
-      ? "Расчёт прибыли не завершён. Показаны только известные суммы."
-      : "Показаны отдельные суммы. Расходы могут включать рекламу."}</p>
+      ? isOzon && breakdown && !breakdown.complete
+        ? "Расшифровка начислений неполная. Показаны подтверждённые суммы."
+        : "Расчёт прибыли не завершён. Показаны только известные суммы."
+      : "Показаны отдельные финансовые показатели."}</p>
     <div className="store-finance-chart">
       <svg className="waterfall" viewBox="0 0 640 245" role="img" aria-label={"Финансовые показатели магазина " + name}>
         <title>Известные суммы показаны отдельными столбцами. Прочерк — данные не загружены.</title>

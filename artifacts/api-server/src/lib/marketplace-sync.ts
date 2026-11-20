@@ -33,7 +33,9 @@ export async function sharedSnapshot(connection: MarketplaceConnection, from: st
   // WB funnel totals are period-specific; only its raw sales feed is shared.
   const range = connection.marketplace === 'ozon' && from >= rollingFrom && to <= today
     ? { from: rollingFrom, to: today } : { from, to };
-  if(connection.marketplace!=='ozon')return sharedDataset<MarketplaceSnapshot>(connection,'snapshot',range);
+  if (connection.marketplace === 'wildberries') {
+    return sharedWildberriesSnapshot(connection, from, to);
+  }
   const oldestBuyout=new Date(Date.parse(today)-31*86400000).toISOString().slice(0,10);
   const [analytic,buyouts,subscription]=await Promise.allSettled([
     sharedDataset<MarketplaceSnapshot>(connection,'snapshot',range),
@@ -80,6 +82,78 @@ export async function sharedSnapshot(connection: MarketplaceConnection, from: st
   return snapshot;
 }
 
+async function sharedWildberriesSnapshot(connection: MarketplaceConnection, from: string, to: string) {
+  let snapshot: (MarketplaceSnapshot & { sync: SyncStatus }) | undefined;
+  let deferred: SyncDeferred | undefined;
+  try {
+    snapshot = await sharedDataset<MarketplaceSnapshot>(connection, 'snapshot', { from, to });
+  } catch (error) {
+    if (!(error instanceof SyncDeferred)) throw error;
+    deferred = error;
+  }
+  const dates: string[] = [];
+  for (let day = Date.parse(from); day <= Date.parse(to); day += 86400000) {
+    dates.push(new Date(day).toISOString().slice(0, 10));
+  }
+  const missingDates = new Set(dates.filter(date => {
+    const point = snapshot?.daily.get(date);
+    return !snapshot?.wbDailyFunnel || !point || point.missing?.orders || point.missing?.views || point.missing?.carts;
+  }));
+  if (snapshot && !missingDates.size) return snapshot;
+
+  // A finished day remains useful even after its query cache expires.
+  // Keep the pending job and its provider budget intact while serving those days.
+  const { rows } = await pool.query(`SELECT result,partial_result,updated_at FROM marketplace_sync_jobs
+    WHERE connection_id=$1 AND revision=$2 AND kind='snapshot'
+    AND params->>'from' <= $4 AND params->>'to' >= $3
+    AND (result IS NOT NULL OR partial_result IS NOT NULL)
+    ORDER BY generation DESC,updated_at DESC NULLS LAST LIMIT 32`,
+    [connection.id, revisionOf(connection.credentialsCiphertext), from, to]);
+  let savedAt: string | null = null;
+  let reused = false;
+  for (const row of rows) {
+    for (const stored of [row.partial_result, row.result]) {
+      if (!stored || !missingDates.size) continue;
+      const prior = unpackSyncResult<MarketplaceSnapshot>(stored);
+      if (!prior.wbDailyFunnel) continue;
+      for (const date of missingDates) {
+        const point = prior.daily.get(date);
+        if (!point || point.missing?.orders || point.missing?.views || point.missing?.carts) continue;
+        missingDates.delete(date);
+        const existing = snapshot?.daily.get(date);
+        if (!snapshot) {
+          const reason = deferred?.message ?? 'Данные ВБ обновляются.';
+          snapshot = {
+            daily: new Map(), funnel: { orders: 0, units: 0, views: 0, cartAdds: 0 },
+            unavailable: { funnel: reason, sales: 'Данные продаж ВБ пока загружаются.' },
+            sync: { state: 'waiting', stale: true, updatedAt: null, nextAttemptAt: new Date(deferred!.retryAt).toISOString() },
+          };
+        }
+        savedAt ??= row.updated_at?.toISOString() ?? null;
+        snapshot.daily.set(date, {
+          date, revenue: existing?.revenue ?? 0, units: existing?.units ?? 0,
+          views: point.views,
+          cartAdds: point.cartAdds,
+          orders: point.orders,
+          orderAmount: point.orderAmount ?? null,
+        });
+        reused = true;
+      }
+    }
+  }
+  if (!snapshot) throw deferred!;
+  if (reused) {
+    if (!snapshot.wbDailyFunnel) {
+      for (const point of snapshot.daily.values()) {
+        if (point.orderAmount === undefined) point.missing = { views: true, carts: true, orders: true };
+      }
+      snapshot.wbDailyFunnel = true;
+    }
+    snapshot.sync.updatedAt ??= savedAt;
+  }
+  return snapshot;
+}
+
 export async function ensureMarketplaceSyncSchema(): Promise<void> {
   await pool.query(`
     CREATE TABLE IF NOT EXISTS marketplace_sync_jobs (
@@ -115,9 +189,12 @@ export async function ensureMarketplaceSyncSchema(): Promise<void> {
     FROM marketplace_connections c WHERE j.connection_id=c.id AND
     (c.marketplace='wildberries' AND j.kind='snapshot')
     AND (j.params->>'sourceVersion') IS DISTINCT FROM '5'`);
-  await pool.query(`UPDATE marketplace_sync_jobs j SET state='queued',next_attempt_at=now(),params=params||'{"sourceVersion":7}'::jsonb
+  await pool.query(`UPDATE marketplace_sync_jobs j SET
+    state=CASE WHEN j.state='ready' THEN 'queued' ELSE j.state END,
+    next_attempt_at=CASE WHEN j.state='ready' THEN now() ELSE j.next_attempt_at END,
+    params=params||'{"sourceVersion":8}'::jsonb
     FROM marketplace_connections c WHERE j.connection_id=c.id AND c.marketplace='ozon' AND j.kind='finance'
-    AND (j.params->>'sourceVersion') IS DISTINCT FROM '7'`);
+    AND (j.params->>'sourceVersion') IS DISTINCT FROM '8'`);
 }
 
 // Callers MUST select the connection through their existing company/store ACL first.
@@ -153,7 +230,7 @@ export async function sharedDataset<T>(connection: MarketplaceConnection, kind: 
   // Validate the derived shape as well as params so those old results cannot
   // stay 'ready' until the next 12-hour finance refresh.
   const shape=result as Record<string,unknown>;
-  const outdated=connection.marketplace==='ozon'&&kind==='finance'&&shape.dashboardVersion!==7
+  const outdated=connection.marketplace==='ozon'&&kind==='finance'&&shape.dashboardVersion!==8
     ||connection.marketplace==='wildberries'&&kind==='snapshot'&&shape.funnel&&!shape.wbDailyFunnel;
   if(outdated&&row.state==='ready'){
     await pool.query("UPDATE marketplace_sync_jobs SET state='queued',next_attempt_at=now() WHERE id=$1 AND state='ready'",[id]);

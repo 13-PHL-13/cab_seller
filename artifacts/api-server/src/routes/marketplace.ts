@@ -907,6 +907,7 @@ router.get("/marketplace/finance/ozon", async (req, res): Promise<void> => {
       ...reports[0]!, sync: mergeSyncStatuses(reports.map(item=>item.sync)), soldItems: reports.flatMap((item) => item.soldItems), productSalesError: reports.find((item) => item.productSalesError)?.productSalesError ?? null, productSalesMetric: reports.some((item) => item.productSalesMetric === "ordered_units") ? "ordered_units" : null, totals: Object.fromEntries(totalKeys.map((key) => [key, reports.reduce((sum, item) => sum + item.totals[key], 0)])) as typeof reports[number]["totals"],
       dashboard:Object.fromEntries((['revenue','expenses','commission','logistics','other'] as const).map(key=>[key,reports.every(item=>typeof item.dashboard?.[key]==='number')?reports.reduce((sum,item)=>sum+item.dashboard![key]!,0):null])) as NonNullable<typeof reports[number]['dashboard']>,
       dailyDashboard:reports.length===1?reports[0].dailyDashboard:undefined,
+      expenseBreakdown: reports.length === 1 ? reports[0].expenseBreakdown : undefined,
       catalogCost: { matchedUnits: 0, unmatchedUnits: 0, costOfGoods: 0 },
     };
     const [catalogProducts, marketplaceProducts] = await Promise.all([
