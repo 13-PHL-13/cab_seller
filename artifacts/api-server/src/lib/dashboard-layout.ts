@@ -21,14 +21,14 @@ export function dashboardStoreData(
   const ozon = platform === "ozon";
   return {
     totals: {
-      views: snapshot.funnel.views as number | null,
-      carts: snapshot.funnel.cartAdds as number | null,
+      views: snapshot.unavailable?.funnel ? null : snapshot.funnel.views as number | null,
+      carts: snapshot.unavailable?.funnel ? null : snapshot.funnel.cartAdds as number | null,
       orders: ozon ? snapshot.funnel.orders : null,
-      bought: ozon ? null : snapshot.funnel.units,
+      bought: ozon || snapshot.unavailable?.sales ? null : [...snapshot.daily.values()].reduce((n,p)=>n+p.units,0),
       orderAmount: ozon
         ? [...snapshot.daily.values()].reduce((n, p) => n + p.revenue, 0)
         : null,
-      boughtAmount: ozon
+      boughtAmount: ozon || snapshot.unavailable?.sales
         ? null
         : [...snapshot.daily.values()].reduce((n, p) => n + p.revenue, 0),
     },

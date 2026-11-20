@@ -36,6 +36,22 @@ export function completeSum(
     ? values.reduce<number>((n, v) => n + (v ?? 0), 0)
     : null;
 }
+type StoreIdentity = {id:number;storeName:string;marketplace:string};
+/** A missing source is excluded explicitly; an unknown value never becomes zero. */
+export function metricCoverage(stores: StoreIdentity[], window: DashboardWindow | undefined, key: DashboardMetric, daily=false) {
+  const included=stores.filter(store=>{
+    const data=window?.stores.find(s=>s.id===store.id)?.data;
+    return daily ? data?.daily.some(p=>typeof p[key]==='number' && Number.isFinite(p[key])) : typeof data?.totals[key]==='number' && Number.isFinite(data.totals[key]);
+  });
+  return {included,excluded:stores.filter(s=>!included.some(i=>i.id===s.id))};
+}
+export function metricSum(stores: StoreIdentity[], window: DashboardWindow | undefined, key: DashboardMetric) {
+  return completeSum(metricCoverage(stores,window,key).included.map(s=>window?.stores.find(i=>i.id===s.id)?.data.totals[key]));
+}
+export function sameMetricCohort(stores: StoreIdentity[], current: DashboardWindow | undefined, previous: DashboardWindow | undefined, key: DashboardMetric, daily=false) {
+  const ids=(window:DashboardWindow|undefined)=>metricCoverage(stores,window,key,daily).included.map(s=>s.id).sort((a,b)=>a-b).join(',');
+  return !!current && !!previous && ids(current)!=='' && ids(current)===ids(previous);
+}
 export function change(
   value: number | null,
   previous: number | null,

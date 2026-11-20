@@ -18,6 +18,9 @@ import { workspaceRequest as request } from "@/lib/collaboration-api";
 import { getDashboardWindow } from "@/lib/dashboard-api";
 import {
   completeSum,
+  metricCoverage,
+  metricSum,
+  sameMetricCohort,
   calendarDays,
   money,
   quantity,
@@ -119,17 +122,18 @@ function Toggle({
     </button>
   );
 }
+function CoverageNotice({stores,window,metrics,previous}:{stores:MarketplaceStore[];window:DashboardWindow;metrics:DashboardMetric[];previous?:DashboardWindow}) {
+  const missing=stores.filter(store=>metrics.some(key=>metricCoverage(stores,window,key,true).excluded.some(s=>s.id===store.id)));
+  const changed=previous && metrics.some(key=>metricCoverage(stores,window,key,true).included.map(s=>s.id).sort().join(',')!==metricCoverage(stores,previous,key,true).included.map(s=>s.id).sort().join(','));
+  if(!missing.length && !changed)return null;
+  return <p className="dashboard-coverage" role="note">{missing.length ? `Нет данных: ${missing.map(s=>`${platformName(s.marketplace)} · ${s.storeName}`).join(', ')}. График и итог — по доступным данным.` : ''}{changed ? ' Сравнение недоступно: состав данных за периоды различается.' : ''}</p>;
+}
 function sumMetric(
   stores: MarketplaceStore[],
   window: DashboardWindow | undefined,
   key: DashboardMetric,
 ) {
-  return completeSum(
-    stores.map(
-      (store) =>
-        window?.stores.find((s) => s.id === store.id)?.data.totals[key],
-    ),
-  );
+  return metricSum(stores,window,key);
 }
 function dayPoints(
   stores: MarketplaceStore[],
@@ -143,7 +147,7 @@ function dayPoints(
         ...keys.map((key) => [
           key,
           completeSum(
-            stores.map(
+            metricCoverage(stores,window,key,true).included.map(
               (store) =>
                 window?.stores
                   .find((s) => s.id === store.id)
@@ -219,7 +223,7 @@ function Summary({
                   </strong>{" "}
                   <Change
                     value={sumMetric(stores, window, metric)}
-                    previous={sumMetric(stores, previous, metric)}
+                    previous={sameMetricCohort(stores,window,previous,metric) ? sumMetric(stores, previous, metric) : null}
                   />
                 </span>
               </div>
@@ -588,7 +592,7 @@ export default function DashboardPage() {
       key,
       key === "extra"
         ? extra
-        : completeSum(selected.map((s) => finances[s.id]?.[key])),
+        : completeSum(selected.map((s) => finances[s.id]?.[key]).filter(v=>typeof v==='number' && Number.isFinite(v))),
     ]),
   ) as Finance;
   useEffect(() => {
@@ -598,6 +602,7 @@ export default function DashboardPage() {
         stores: selected.map((s) => s.storeName).join(", "),
         period: datesLabel(chosen),
         data: chosen.stores,
+        coverage: keys.map(key=>({metric:key,excluded:metricCoverage(selected,chosen,key).excluded})),
         finances: canFinance ? totals : undefined,
         missingValues: "null означает отсутствие данных",
       }),
@@ -793,10 +798,12 @@ export default function DashboardPage() {
         label: "Предыдущий период",
         color: "#9baaa6",
         previous: true,
-        values: previousPoints.map((p) => p[key]),
+        values: previousPoints.map((p) => sameMetricCohort(own,chosen,previous,key,true) ? p[key] : null),
       },
     ]);
     return (
+      <>
+      {!loading && <CoverageNotice stores={own} window={chosen} metrics={metrics} previous={previous} />}
       <DashboardChart
         title={label}
         dates={dates}
@@ -806,10 +813,11 @@ export default function DashboardPage() {
             : series
         }
         current={currentPoints}
-        previous={previousPoints}
+        previous={previousPoints.map(p=>Object.fromEntries(Object.entries(p).map(([key,value])=>[key,key==='date'||sameMetricCohort(own,chosen,previous,key as DashboardMetric,true)?value:null])) as DashboardPoint)}
         unit={kind === "funnel" ? "count" : unit}
         bar={aggregate && kind !== "funnel"}
       />
+      </>
     );
   }
   function funnelMetrics(own: MarketplaceStore[]) {
@@ -838,7 +846,7 @@ export default function DashboardPage() {
                   <strong>{quantity(sumMetric(own, chosen, key))}</strong>{" "}
                   <Change
                     value={sumMetric(own, chosen, key)}
-                    previous={sumMetric(own, previous, key)}
+                    previous={sameMetricCohort(own,chosen,previous,key) ? sumMetric(own, previous, key) : null}
                   />
                 </span>
               </div>
@@ -865,6 +873,7 @@ export default function DashboardPage() {
     from: chosen.from,
     to: chosen.to,
     stores: chosen.stores.filter((s) => own.some((o) => o.id === s.id)),
+    coverage: keys.map(key=>({metric:key,excluded:metricCoverage(own,chosen,key).excluded})),
   });
   return (
     <div
@@ -1243,7 +1252,7 @@ export default function DashboardPage() {
                               value={completeSum(
                                 selected
                                   .filter((s) => s.marketplace === p)
-                                  .map((s) => finances[s.id]?.[key]),
+                                  .map((s) => finances[s.id]?.[key]).filter(v=>typeof v==='number' && Number.isFinite(v)),
                               )}
                               percent={key === "profitability"}
                             />
@@ -1253,6 +1262,7 @@ export default function DashboardPage() {
                       ))}
                     </div>
                   )}
+                  {key !== 'extra' && selected.some(s=>finances[s.id]?.[key]===null || finances[s.id]?.[key]===undefined) && <p className="dashboard-coverage">Итог без данных: {selected.filter(s=>finances[s.id]?.[key]==null).map(s=>`${platformName(s.marketplace)} · ${s.storeName}`).join(', ')}.</p>}
                 </Block>
               ))}
             </div>

@@ -81,9 +81,12 @@ function Workspace({ children, userEmail, onLogout }: { children: React.ReactNod
   return (
     <div className="app">
       <aside className={`sidebar${open ? ' open' : ''}`}>
-        <div className="brand brand-approved"><BrandLogo /><div className="brand-sub">Единый кабинет продавца</div></div>
+        <div className="brand brand-approved"><BrandLogo dark /></div>
         <nav style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-          {visibleNav.map((item) => { const Icon = item.icon; return <Link key={item.href} href={item.href} className={`nav-item${item.match(location) ? ' active' : ''}`} onClick={() => setOpen(false)}><Icon size={17} />{item.label}{item.href === '/tasks' && <span className="task-count">{receivedCount}</span>}</Link>; })}
+          {visibleNav.filter(item => !['/settings','/team'].includes(item.href)).map((item) => { const Icon = item.icon; return <Link key={item.href} href={item.href} className={`nav-item${item.match(location) ? ' active' : ''}`} onClick={() => setOpen(false)}><Icon size={17} />{item.label}{item.href === '/tasks' && <span className="task-count">{receivedCount}</span>}</Link>; })}
+        </nav>
+        <nav className="sidebar-bottom-nav" aria-label="Настройки компании">
+          {visibleNav.filter(item => ['/settings','/team'].includes(item.href)).map(item => {const Icon=item.icon;return <Link key={item.href} href={item.href} className={`nav-item${item.match(location)?' active':''}`} onClick={()=>setOpen(false)}><Icon size={17}/>{item.label}</Link>;})}
         </nav>
         <div className="sidebar-footer">© 2026 Навигатор продаж</div>
       </aside>
