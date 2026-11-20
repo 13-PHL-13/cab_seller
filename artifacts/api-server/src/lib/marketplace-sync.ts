@@ -311,24 +311,41 @@ export async function workOne(handlers: Handlers): Promise<boolean> {
 export function startMarketplaceSync(handlers: Handlers): () => void {
   let stopped = false;
   let running = false;
+  let refreshing = false;
   let lastSeed = 0;
+
+  const refresh = async () => {
+    if (stopped || refreshing || Date.now() - lastSeed <= 60_000) return;
+    refreshing = true;
+    lastSeed = Date.now();
+    try {
+      await seedCommonDatasets();
+      // Refresh historic ranges only while they have recent consumers.
+      await pool.query(`UPDATE marketplace_sync_jobs SET state='queued',generation=now()
+        WHERE state='ready' AND next_attempt_at<=now() AND accessed_at>now()-interval '10 minutes'`);
+    } catch {
+      console.warn('Marketplace dataset scheduling failed; existing jobs can still run.');
+    } finally {
+      refreshing = false;
+    }
+  };
+
   const tick = async () => {
     if (stopped || running) return;
     running = true;
     try {
-      if (Date.now() - lastSeed > 60_000) { await seedCommonDatasets(); lastSeed = Date.now(); }
-      // Keep recently used datasets warm without relying on page navigation.
-      // Historic ranges stop refreshing ten minutes after their last consumer.
-      await pool.query(`UPDATE marketplace_sync_jobs SET state='queued',generation=now()
-        WHERE state='ready' AND next_attempt_at<=now() AND accessed_at>now()-interval '10 minutes'`);
       for (let i = 0; i < 8 && !stopped; i++) if (!await workOne(handlers)) break;
     }
     catch { console.warn('Marketplace queue unavailable; durable leases will recover on the next tick.'); }
     finally { running = false; }
   };
-  const timer = setInterval(() => { void tick(); }, 2000);
+  const poll = () => {
+    void tick();
+    void refresh();
+  };
+  const timer = setInterval(poll, 2000);
   timer.unref();
-  void tick();
+  poll();
   return () => { stopped = true; clearInterval(timer); };
 }
 

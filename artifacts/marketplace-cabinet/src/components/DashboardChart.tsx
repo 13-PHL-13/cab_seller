@@ -155,6 +155,10 @@ export default function DashboardChart({
           viewBox={`0 0 ${W} ${H}`}
           role="img"
           aria-label={title}
+          onPointerLeave={(event) => {
+            if (event.pointerType !== "touch") setActive(null);
+          }}
+          onPointerCancel={() => setActive(null)}
         >
           <title>{title}</title>
           {unit === "money" && (
