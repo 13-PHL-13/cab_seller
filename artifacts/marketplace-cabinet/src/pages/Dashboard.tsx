@@ -12,6 +12,7 @@ import {
   getMarketplaceStores,
   type MarketplaceStore,
   type WildberriesFinanceReport,
+  type OzonFinanceReport,
   type SellerExpensesReport,
 } from "@/lib/marketplace-api";
 import { workspaceRequest as request } from "@/lib/collaboration-api";
@@ -19,6 +20,7 @@ import { getDashboardWindow } from "@/lib/dashboard-api";
 import {
   completeSum,
   metricCoverage,
+  chartCoverage,
   metricSum,
   sameMetricCohort,
   calendarDays,
@@ -122,12 +124,17 @@ function Toggle({
     </button>
   );
 }
-function CoverageNotice({stores,window,metrics,previous}:{stores:MarketplaceStore[];window:DashboardWindow;metrics:DashboardMetric[];previous?:DashboardWindow}) {
-  const missing=stores.filter(store=>metrics.some(key=>metricCoverage(stores,window,key,true).excluded.some(s=>s.id===store.id)||metricCoverage(stores,window,key).excluded.some(s=>s.id===store.id)));
+function CoverageNotice({stores,window,metrics,previous,coherent=false}:{stores:MarketplaceStore[];window:DashboardWindow;metrics:DashboardMetric[];previous?:DashboardWindow;coherent?:boolean}) {
+  const missing=coherent?chartCoverage(stores,window,metrics).excluded:stores.filter(store=>metrics.some(key=>metricCoverage(stores,window,key,true).excluded.some(s=>s.id===store.id)||metricCoverage(stores,window,key).excluded.some(s=>s.id===store.id)));
   const changed=previous && metrics.some(key=>metricCoverage(stores,window,key,true).included.map(s=>s.id).sort().join(',')!==metricCoverage(stores,previous,key,true).included.map(s=>s.id).sort().join(','));
   if(!missing.length && !changed)return null;
   const names=missing.map(s=>`${platformName(s.marketplace)} · ${s.storeName}`).join(', ');
-  const reasons=[...new Set(missing.flatMap(store=>metrics.map(key=>window.stores.find(s=>s.id===store.id)?.data.reasons?.[key]).filter(Boolean)))].join(' ');
+  const reasons=[...new Set(missing.flatMap(store=>metrics.map(key=>window.stores.find(s=>s.id===store.id)?.data.reasons?.[key]).filter((reason):reason is string=>!!reason)))].join(' ');
+  if(coherent&&missing.length)return <p className="dashboard-coverage" role="note">{missing.map(store=>{
+    const reasons=[...new Set(metrics.map(key=>window.stores.find(s=>s.id===store.id)?.data.reasons?.[key]).filter(Boolean))];
+    const premium=reasons.find(reason=>/Требуется Premium/.test(reason!));
+    return `${platformName(store.marketplace)} · ${store.storeName} — ${premium?premium.replace('Требуется','требуется'):'не все данные загружены'}`;
+  }).join('; ')}. {chartCoverage(stores,window,metrics).included.length?'График без этих магазинов.':'Нет магазинов с полным набором показателей.'}</p>;
   return <p className="dashboard-coverage" role="note" title={changed ? 'Сравнение скрыто: за периоды доступен разный состав магазинов.' : undefined}>{missing.length ? metrics.length>1 ? `Часть показателей недоступна: ${names}. Итог по доступным данным.` : `Итог без данных: ${names}.` : 'Сравнение периодов недоступно.'} {reasons}</p>;
 }
 function sumMetric(
@@ -436,6 +443,7 @@ export default function DashboardPage() {
   const [reports, setReports] = useState<
       Record<number, WildberriesFinanceReport>
     >({}),
+    [ozonReports,setOzonReports]=useState<Record<number,OzonFinanceReport>>({}),
     [extra, setExtra] = useState<number | null>(null),
     [financeErrors, setFinanceErrors] = useState<string[]>([]),
     [topVisible, setTopVisible] = useState(false),
@@ -525,10 +533,11 @@ export default function DashboardPage() {
   useEffect(() => {
     let active = true;
     setReports({});
+    setOzonReports({});
     setExtra(null);
     setFinanceErrors([]);
     if (!canFinance || !stores.length) return;
-    const wb = selected.filter((s) => s.marketplace === "wildberries");
+    const wb = selected.filter((s) => s.marketplace === "wildberries"),ozon=selected.filter(s=>s.marketplace==='ozon');
     const refreshFinance = () => { void Promise.allSettled(
       wb.map((s) =>
         request<WildberriesFinanceReport>(
@@ -549,7 +558,14 @@ export default function DashboardPage() {
         else warnings.push(wb[i].storeName + ": " + r.reason.message);
       });
       setReports(next);
-      setFinanceErrors(warnings);
+      setFinanceErrors(current=>[...current.filter(message=>message.startsWith('Ozon · ')),...warnings]);
+    });
+    void Promise.allSettled(ozon.map(s=>request<OzonFinanceReport>('/api/marketplace/finance/ozon?'+new URLSearchParams({from:companyMonth,to:today,storeId:String(s.id)})))).then(results=>{
+      if(!active)return;
+      const next:Record<number,OzonFinanceReport>={};
+      const warnings:string[]=[];
+      results.forEach((result,index)=>{if(result.status==='fulfilled')next[ozon[index].id]=result.value;else warnings.push('Ozon · '+ozon[index].storeName+': '+result.reason.message);});
+      setOzonReports(next);setFinanceErrors(current=>[...current.filter(message=>!message.startsWith('Ozon · ')),...warnings]);
     });
     if (platform === "all" && !store)
       void request<SellerExpensesReport>(
@@ -574,6 +590,14 @@ export default function DashboardPage() {
         selected.map((s) => {
           const result = blankFinance(),
             report = reports[s.id];
+          if(s.marketplace==='ozon'){
+            const ozon=ozonReports[s.id];
+            result.revenue=ozon?.dashboard?.revenue??null;
+            result.expenses=ozon?.dashboard?.expenses??null;
+            // ordered_units is not financial sold quantity; no COGS substitution.
+            if(ozon&&!ozon.productSalesMetric&&ozon.catalogCost?.unmatchedUnits===0)result.cost=ozon.catalogCost.costOfGoods;
+            return [s.id,result];
+          }
           if (report && !report.incomplete) {
             result.revenue = report.totals.retailAmount;
             result.expenses = completeSum([
@@ -594,7 +618,7 @@ export default function DashboardPage() {
           return [s.id, result];
         }),
       ),
-    [reports, selected.map((s) => s.id).join(",")],
+    [reports,ozonReports, selected.map((s) => s.id).join(",")],
   ) as Record<number, Finance>;
   const totals = Object.fromEntries(
     metricLabels.map(([key]) => [
@@ -759,11 +783,15 @@ export default function DashboardPage() {
     id: string,
     aggregate: boolean,
   ) {
-    const currentPoints = dayPoints(own, chosen, dates),
+    const groupMetrics:DashboardMetric[]=kind==='funnel'?['views','carts','orders','bought']:kind==='orders'?['orders','orderAmount']:['bought','boughtAmount'];
+    const currentOwn=aggregate?chartCoverage(own,chosen,groupMetrics).included:own;
+    const previousOwn=aggregate?chartCoverage(own,previous,groupMetrics).included:own;
+    const sameGroup=!aggregate||currentOwn.length>0&&currentOwn.map(s=>s.id).sort().join(',')===previousOwn.map(s=>s.id).sort().join(',');
+    const currentPoints = dayPoints(currentOwn, chosen, dates),
       previousDates = previous
         ? calendarDays(previous.from, previous.to)
         : dates,
-      previousPoints = dayPoints(own, previous, previousDates),
+      previousPoints = dayPoints(previousOwn, previous, previousDates),
       unit = units[id] ?? "count",
       label =
         kind === "funnel"
@@ -807,12 +835,12 @@ export default function DashboardPage() {
         label: "Предыдущий период",
         color: "#9baaa6",
         previous: true,
-        values: previousPoints.map((p) => sameMetricCohort(own,chosen,previous,key,true) ? p[key] : null),
+        values: previousPoints.map((p) => sameGroup&&sameMetricCohort(currentOwn,chosen,previous,key,true) ? p[key] : null),
       },
     ]);
     return (
       <>
-      {!loading && <CoverageNotice stores={own} window={chosen} metrics={metrics} previous={previous} />}
+      {!loading && <CoverageNotice stores={own} window={chosen} metrics={aggregate?groupMetrics:metrics} previous={previous} coherent={aggregate} />}
       <DashboardChart
         title={label}
         dates={dates}
@@ -822,14 +850,15 @@ export default function DashboardPage() {
             : series
         }
         current={currentPoints}
-        previous={previousPoints.map(p=>Object.fromEntries(Object.entries(p).map(([key,value])=>[key,key==='date'||sameMetricCohort(own,chosen,previous,key as DashboardMetric,true)?value:null])) as DashboardPoint)}
+        previous={previousPoints.map(p=>Object.fromEntries(Object.entries(p).map(([key,value])=>[key,key==='date'||sameGroup&&sameMetricCohort(currentOwn,chosen,previous,key as DashboardMetric,true)?value:null])) as DashboardPoint)}
         unit={kind === "funnel" ? "count" : unit}
         bar={aggregate && kind !== "funnel"}
       />
       </>
     );
   }
-  function funnelMetrics(own: MarketplaceStore[]) {
+  function funnelMetrics(selectedStores: MarketplaceStore[],coherent=false) {
+    const own=coherent?chartCoverage(selectedStores,chosen,['views','carts','orders','bought']).included:selectedStores;
     const currentDay = windows.current?.to ?? today,
       yesterday = new Date(Date.parse(currentDay + "T00:00:00Z") - 86400000)
         .toISOString()
@@ -848,7 +877,7 @@ export default function DashboardPage() {
           <span className="legend-item" key={key}>
             <span className={"stage-dot " + key} />
             {label}
-            {own.some(store=>chosen.stores.find(item=>item.id===store.id)?.data.reasons?.[key]==='Требуется Премиум на Озон') && <small className="card-sub" style={{display:'block'}}>Требуется Премиум на Озон</small>}
+            {!coherent && [...new Set(selectedStores.map(store=>chosen.stores.find(item=>item.id===store.id)?.data.reasons?.[key]).filter((reason):reason is string=>!!reason&&/Требуется Premium/.test(reason)))].map(reason=><small key={reason} className="card-sub" style={{display:'block'}}>{key==='views'?'Просмотры':label} — {reason.replace('Требуется','требуется')}</small>)}
             <div className="metric-periods">
               <div>
                 <span>2 недели</span>
@@ -1012,7 +1041,7 @@ export default function DashboardPage() {
             headerUnits={unitControls(kind + "-total")}
             headerSummary={
               <Summary
-                stores={selected}
+                stores={chartCoverage(selected,chosen,kind==='orders'?['orders','orderAmount']:['bought','boughtAmount']).included}
                 window={chosen}
                 previous={previous}
                 current={windows.current}
@@ -1115,7 +1144,7 @@ export default function DashboardPage() {
         period={datesLabel(chosen)}
         sourceData={contextData(selected)}
       >
-        {funnelMetrics(selected)}
+        {funnelMetrics(selected,true)}
         {chart("funnel", selected, "funnel-total", true)}
       </Block>
       <section className="breakdown-section" data-primary="funnel-chart">
@@ -1290,12 +1319,13 @@ export default function DashboardPage() {
               {selected.map((s) => {
                 const finance = finances[s.id] ?? blankFinance(),
                   report = reports[s.id],
+                  ozon=ozonReports[s.id]?.dashboard,
                   expenses = [
-                    ["Комиссия", report?.totals.marketplaceReward],
-                    ["Логистика", report?.totals.delivery],
+                    ["Комиссия", ozon?.commission??report?.totals.marketplaceReward],
+                    ["Логистика", ozon?.logistics??report?.totals.delivery],
                     [
                       "Услуги",
-                      report
+                      ozon ? null : report
                         ? completeSum([
                             report.totals.storage,
                             report.totals.acceptance,
@@ -1305,7 +1335,7 @@ export default function DashboardPage() {
                     ],
                     [
                       "Прочее",
-                      report
+                      ozon ? ozon.other : report
                         ? completeSum([
                             report.totals.penalties,
                             report.totals.deductions,

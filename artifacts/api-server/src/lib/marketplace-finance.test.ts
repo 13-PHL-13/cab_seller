@@ -58,7 +58,16 @@ test("ignores missing, malformed and non-finite amounts without producing NaN", 
 });
 
 
-import { aggregateOzonAccruals } from "./marketplace-finance-ozon.ts";
+import { aggregateOzonAccruals,ozonDashboardFinance } from "./marketplace-finance-ozon.ts";
+
+test('Ozon dashboard reconciles realized revenue and net accruals including refunds',()=>{
+  const posting=(sale:number,net:number,fee:number,delivery:number)=>({accrued_category:'POSTING',total_amount:{amount:String(net),currency:'RUB'},posting:{products:[{commission:{sale_amount:{amount:String(sale)},commission:{amount:String(fee)}},delivery:{total_accrued:{amount:String(delivery)}}}]}});
+  const result=ozonDashboardFinance([posting(1000,750,-100,-150),posting(-200,-180,20,0),{accrued_category:'ITEM',total_amount:{amount:'-50',currency:'RUB'}}]);
+  assert.deepEqual(result,{revenue:800,expenses:280,commission:80,logistics:150,other:50});
+  assert.equal(ozonDashboardFinance([{accrued_category:'POSTING',total_amount:{amount:'750'}}]).revenue,null);
+  assert.equal(ozonDashboardFinance([{accrued_category:'POSTING',total_amount:{amount:'750'}}]).expenses,null);
+  assert.equal(ozonDashboardFinance([]).revenue,0);
+});
 
 test("aggregates Ozon accrual totals by top-level category without double counting", () => {
   const result = aggregateOzonAccruals([

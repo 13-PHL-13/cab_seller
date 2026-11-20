@@ -13,6 +13,7 @@ export type OzonFinanceTotals = {
 };
 
 export type OzonFinanceResult = {
+  dashboard?: {revenue:number|null;expenses:number|null;commission:number|null;logistics:number|null;other:number|null};
   marketplace: "ozon";
   currency: string | null;
   from: string;
@@ -132,6 +133,37 @@ export function aggregateOzonAccruals(rows: unknown[]): OzonFinanceTotals {
   return totals;
 }
 
+// total_amount is a net accrual, never gross revenue. Gross realized sales
+// come only from posting.products[].commission.sale_amount (returns signed).
+export function ozonDashboardFinance(rows:unknown[]) {
+  let revenue=0,commission=0,logistics=0,complete=true,detailsComplete=true;
+  const currencies=new Set<string>();
+  for(const raw of rows){
+    const row=asRecord(raw),money=asRecord(row.total_amount);
+    if(typeof money.currency==='string')currencies.add(money.currency);
+    if(amount(money.amount)===null)complete=false;
+    if(row.accrued_category!=='POSTING')continue;
+    const products=asArray(asRecord(row.posting).products);
+    if(!products.length)complete=false;
+    for(const rawProduct of products){
+      const product=asRecord(rawProduct),fees=asRecord(product.commission);
+      const sale=asRecord(fees.sale_amount),value=amount(sale.amount);
+      if(typeof sale.currency==='string')currencies.add(sale.currency);
+      if(value===null)complete=false;else revenue+=value;
+      const fee=amount(asRecord(fees.commission).amount);
+      const delivery=amount(asRecord(asRecord(product.delivery).total_accrued).amount);
+      if(fee===null||delivery===null)detailsComplete=false;
+      else {commission-=fee;logistics-=delivery;}
+    }
+  }
+  if(currencies.size>1)complete=false;
+  const expenses=complete?round(revenue-aggregateOzonAccruals(rows).accrued):null;
+  return {revenue:complete?round(revenue):null,expenses,
+    commission:complete&&detailsComplete?round(commission):null,
+    logistics:complete&&detailsComplete?round(logistics):null,
+    other:expenses!==null&&detailsComplete?round(expenses-commission-logistics):null};
+}
+
 async function requestOzonAccrualDay(
   credentials: { clientId: string; apiKey: string },
   date: string,
@@ -228,6 +260,7 @@ export async function getOzonFinanceReport(
 
   return {
     marketplace: "ozon",
+    dashboard:ozonDashboardFinance(rows),
     currency,
     from,
     to,

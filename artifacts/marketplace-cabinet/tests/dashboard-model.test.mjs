@@ -1,6 +1,20 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { completeSum,change,calendarDays,metricCoverage,metricSum,sameMetricCohort } from '../src/lib/dashboard-model.ts';
+import { completeSum,change,calendarDays,metricCoverage,metricSum,sameMetricCohort,chartCoverage } from '../src/lib/dashboard-model.ts';
+
+test('a combined chart uses one complete store cohort for every stage and every day',()=>{
+ const store=id=>({id,storeName:String(id),marketplace:id===1?'ozon':'wildberries'});
+ const stores=[store(1),store(2)];
+ const point={date:'2026-11-20',views:10,carts:2,orders:1,bought:0};
+ const window={from:point.date,to:point.date,stores:stores.map(s=>({...s,data:{totals:{...point},daily:[{...point}]}}))};
+ window.stores[0].data.totals.views=null;window.stores[0].data.daily[0].views=null;
+ const metrics=['views','carts','orders','bought'];
+ assert.deepEqual(chartCoverage(stores,window,metrics).included,[stores[1]]);
+ assert.equal(metricSum(chartCoverage(stores,window,metrics).included,window,'orders'),1);
+ window.stores[1].data.daily=[];
+ assert.deepEqual(chartCoverage(stores,window,metrics).included,[]);
+ assert.equal(metricSum(chartCoverage(stores,window,metrics).included,window,'orders'),null);
+});
 test('aggregate is unavailable when any selected store is missing, while a verified zero stays zero',()=>{
  assert.equal(completeSum([]),null);assert.equal(completeSum([100,null]),null);assert.equal(completeSum([100,undefined]),null);assert.equal(completeSum([NaN,3]),null);assert.equal(completeSum([0,0]),0);assert.equal(completeSum([12,8]),20);
 });

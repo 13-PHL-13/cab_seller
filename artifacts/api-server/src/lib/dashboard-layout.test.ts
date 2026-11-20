@@ -34,7 +34,7 @@ test("unsupported metrics remain missing, never become zero or a different metri
   assert.equal(ozon.totals.orders, 9);
   assert.equal(ozon.daily[0].boughtAmount, null);
   const wb = dashboardStoreData(snapshot, "wildberries");
-  assert.equal(wb.totals.orders, null);
+  assert.equal(wb.totals.orders, 9);
   assert.equal(wb.daily[0].views, null);
   assert.equal(wb.totals.bought, 5);
 });

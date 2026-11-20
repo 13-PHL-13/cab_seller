@@ -13,15 +13,18 @@ type DailyPoint = {
   cartAdds: number;
   boughtUnits?: number | null;
   boughtAmount?: number | null;
+  orderAmount?: number | null;
   missing?: Partial<Record<'revenue'|'orders'|'views'|'carts',boolean>>;
 };
 
 export type MarketplaceSnapshot = {
   subscription?:OzonSubscription;
   metricSchemaVersion?:number;
+  wbDailyFunnel?: boolean;
+  orderAmount?: number | null;
   daily: Map<string, DailyPoint>;
   funnel: Omit<DailyPoint, "date" | "revenue">;
-  unavailable?: { sales?: string; funnel?: string; views?: string; carts?: string; orders?: string; revenue?: string; buyouts?: string };
+  unavailable?: { sales?: string; funnel?: string; funnelDays?: string; views?: string; carts?: string; orders?: string; revenue?: string; buyouts?: string };
 };
 
 export class MarketplaceRateLimitError extends Error {
@@ -330,7 +333,7 @@ function wildberriesCards(response: Record<string, unknown>): unknown[] {
 function readWildberriesFunnel(
   response: Record<string, unknown>,
 ): MarketplaceSnapshot["funnel"] {
-  const total = { orders: 0, units: 0, views: 0, cartAdds: 0 };
+  const total = { orders: 0, units: 0, views: 0, cartAdds: 0, orderAmount: 0 as number|null };
   for (const rawCard of wildberriesCards(response)) {
     const card = asRecord(rawCard);
     const statistics = asRecord(card["statistics"]);
@@ -347,6 +350,8 @@ function readWildberriesFunnel(
     total.cartAdds += asNumber(metrics["cartCount"]);
     total.orders += asNumber(metrics["orderCount"]);
     total.units += asNumber(metrics["buyoutCount"]);
+    const orderSum = metrics['orderSum'];
+    total.orderAmount = total.orderAmount !== null && orderSum !== null && orderSum !== undefined && Number.isFinite(Number(orderSum)) ? total.orderAmount + Number(orderSum) : null;
   }
 
   return total;
@@ -384,9 +389,9 @@ export async function getWildberriesSnapshot(
   else snapshot.unavailable.funnel=funnelResult.reason instanceof Error ? funnelResult.reason.message : 'Нет данных воронки ВБ.';
   if(salesResult.status==='rejected'){
     snapshot.unavailable.sales=salesResult.reason instanceof Error ? salesResult.reason.message : 'Нет данных продаж ВБ.';
-    return snapshot;
   }
-  const sales=salesResult.value;
+  snapshot.orderAmount=funnelResult.status==='fulfilled' ? snapshot.funnel.orderAmount : null;
+  const sales=salesResult.status==='fulfilled' ? salesResult.value : [];
   // A successful complete feed establishes real zero-sale days, unlike a failed feed.
   for(let t=Date.parse(from+'T00:00:00Z');t<=Date.parse(to+'T00:00:00Z');t+=86400000){
     const date=new Date(t).toISOString().slice(0,10);
@@ -418,6 +423,27 @@ export async function getWildberriesSnapshot(
     snapshot.daily.set(date, point);
   }
 
+  // Per-period totals cannot be spread over days or replaced with sales.
+  // Read the same documented funnel method for each day; the durable worker
+  // resumes from cached pages and obeys the ordinary Basic 30-minute budget.
+  if (allowPartial) {
+    snapshot.wbDailyFunnel=true;
+    for (const point of snapshot.daily.values()) point.missing={views:true,carts:true,orders:true};
+    for (const date of [...snapshot.daily.keys()].sort().reverse()) {
+      try {
+        const funnel=readWildberriesFunnel(await requestWildberriesFunnel(credentials,date,date));
+        const point=snapshot.daily.get(date)!;
+        point.views=funnel.views;point.cartAdds=funnel.cartAdds;point.orders=funnel.orders;
+        point.orderAmount=funnel.orderAmount??null;point.missing={};
+      } catch(error) {
+        const reason=error instanceof Error?error.message:'Дневная воронка ВБ не загружена.';
+        snapshot.unavailable.funnelDays??=reason;
+        // A deferred request already records its retry time in syncContext.
+        // Avoid probing every remaining day against the same unavailable budget.
+        break;
+      }
+    }
+  }
   return snapshot;
 }
 
