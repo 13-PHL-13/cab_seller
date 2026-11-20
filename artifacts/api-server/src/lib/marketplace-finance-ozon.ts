@@ -13,6 +13,7 @@ export type OzonFinanceTotals = {
 };
 
 export type OzonFinanceResult = {
+  dailyDashboard?:Array<{date:string}&ReturnType<typeof ozonDashboardFinance>>;
   dashboardVersion?:number;
   dashboardDiagnostics?: ReturnType<typeof ozonAccrualShape>;
   dashboard?: {revenue:number|null;expenses:number|null;commission:number|null;logistics:number|null;other:number|null};
@@ -189,6 +190,12 @@ export function ozonAccrualShape(rows:unknown[]){
   return {postingRows,emptyPostings,products,commissions,saleAmounts,scalarSaleAmounts,salePrices,deliveryAmounts};
 }
 
+export function ozonDailyDashboard(rows:unknown[],from:string,to:string){
+  // Do not silently lose undated or out-of-period accruals in a comparison.
+  if(rows.some(raw=>{const date=asRecord(raw).date;return typeof date!=='string'||!/^\d{4}-\d{2}-\d{2}$/.test(date)||date<from||date>to;}))return undefined;
+  return datesInRange(from,to).map(date=>({date,...ozonDashboardFinance(rows.filter(raw=>asRecord(raw).date===date))}));
+}
+
 async function requestOzonAccrualDay(
   credentials: { clientId: string; apiKey: string },
   date: string,
@@ -261,7 +268,13 @@ export async function getOzonFinanceReport(
     const seenCursors = new Set<string>();
     for (;;) {
       const result = await requestOzonAccrualDay(credentials, date, lastId);
-      rows.push(...result.accruals);
+      rows.push(...result.accruals.map(raw=>{
+        const row=asRecord(raw),reportedDate=row.date;
+        // Each page is requested for one known accrual day. Use that day if
+        // an otherwise valid row omits it; preserve inconsistent dates so the
+        // daily comparison fails closed rather than moving financial amounts.
+        return {...row,date:reportedDate===undefined?date:typeof reportedDate==='string'&&reportedDate.slice(0,10)===date?date:reportedDate};
+      }));
       if (!result.accruals.length || !result.lastId) break;
       if (seenCursors.has(result.lastId) || result.lastId === lastId) {
         throw new Error(`Ozon: курсор пагинации не изменился для даты ${date}. Отчёт не был завершён.`);
@@ -286,7 +299,8 @@ export async function getOzonFinanceReport(
   return {
     marketplace: "ozon",
     dashboard:ozonDashboardFinance(rows),
-    dashboardVersion:6,
+    dailyDashboard:ozonDailyDashboard(rows,from,to),
+    dashboardVersion:7,
     dashboardDiagnostics:ozonAccrualShape(rows),
     currency,
     from,
