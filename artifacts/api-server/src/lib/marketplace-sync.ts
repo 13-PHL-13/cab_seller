@@ -49,7 +49,7 @@ export async function sharedSnapshot(connection: MarketplaceConnection, from: st
   let missingBuyouts=false;
   for(let stamp=Date.parse(from);stamp<=Date.parse(to);stamp+=86400000){
     const date=new Date(stamp).toISOString().slice(0,10);
-    const point=snapshot.daily.get(date)??{date,revenue:0,orders:0,units:0,views:0,cartAdds:0};
+    const point=snapshot.daily.get(date)??{date,revenue:0,orders:0,units:0,views:0,cartAdds:0,missing:{views:Boolean(snapshot.unavailable?.views),carts:Boolean(snapshot.unavailable?.carts),orders:Boolean(snapshot.unavailable?.orders),revenue:Boolean(snapshot.unavailable?.revenue)}};
     const realization=buyouts.status==='fulfilled'?buyouts.value.daily.get(date):undefined;
     point.boughtUnits=realization?.units??null;point.boughtAmount=realization?.amount??null;
     if(!realization)missingBuyouts=true;

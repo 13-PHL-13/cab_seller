@@ -181,9 +181,12 @@ export async function getOzonSnapshot(
     else throw error;
   }
   const snapshot = emptySnapshot();
-  snapshot.metricSchemaVersion=2;
-
-  for (const rawRow of getOzonRows(response)) {
+  const rows=getOzonRows(response);
+  snapshot.metricSchemaVersion=rows.length?2:undefined;
+  if(!rows.length && asArray(asRecord(response.result).totals).length<4){
+    snapshot.unavailable={views:'Просмотры Ozon не загружены: для расширенной аналитики требуется Premium Plus или Premium Pro.',carts:'Корзины Ozon не загружены: для расширенной аналитики требуется Premium Plus или Premium Pro.'};
+  }
+  for (const rawRow of rows) {
     const row = asRecord(rawRow);
     const dimensions = asArray(row["dimensions"]);
     const metrics = asArray(row["metrics"]);
@@ -227,7 +230,9 @@ export function projectOzonPeriod<T extends MarketplaceSnapshot>(snapshot:T,from
   const result={...snapshot,daily:new Map([...snapshot.daily].filter(([date])=>date>=from&&date<=to)),unavailable:{...snapshot.unavailable}};
   if(snapshot.metricSchemaVersion===2){
     for(const field of ['revenue','orders','views','carts'] as const){
-      if(![...result.daily.values()].some(point=>point.missing?.[field]))delete result.unavailable[field];
+      const selected=[...result.daily.values()];
+      const sourceMissingEverywhere=snapshot.daily.size>0 && [...snapshot.daily.values()].every(point=>point.missing?.[field]);
+      if(!selected.some(point=>point.missing?.[field]) && (selected.length>0 || !sourceMissingEverywhere))delete result.unavailable[field];
     }
   }
   result.funnel=[...result.daily.values()].reduce((total,point)=>({orders:total.orders+point.orders,units:total.units+(point.boughtUnits??point.units),views:total.views+point.views,cartAdds:total.cartAdds+point.cartAdds}),{orders:0,units:0,views:0,cartAdds:0});

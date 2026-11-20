@@ -54,3 +54,14 @@ test('an old missing metric cannot hide available Premium data in the selected p
   assert.equal(both.totals.views,null);assert.equal(both.daily[1].views,10);assert.equal(both.daily[0].views,null);
   assert.ok(raw.unavailable?.views);
 });
+
+
+test('an empty period does not turn subscription-restricted metrics into zero',async(t)=>{
+  t.mock.method(globalThis,'fetch',async()=>new Response(JSON.stringify({result:{data:[],totals:[0,0]}})));
+  const empty=dashboardStoreData(projectOzonPeriod(await getOzonSnapshot({clientId:'fixture',apiKey:'fixture'},'2026-11-20','2026-11-20'),'2026-11-20','2026-11-20'),'ozon');
+  assert.equal(empty.totals.orders,0);assert.equal(empty.totals.views,null);assert.equal(empty.totals.carts,null);
+  t.mock.method(globalThis,'fetch',async()=>new Response(JSON.stringify({result:{data:[{dimensions:[{id:'2026-11-19'}],metrics:[100,1]}],totals:[100,1]}})));
+  const source=await getOzonSnapshot({clientId:'fixture',apiKey:'fixture'},'2026-11-19','2026-11-20');
+  const projected=projectOzonPeriod(source,'2026-11-20','2026-11-20');
+  assert.ok(projected.unavailable?.views);assert.equal(projected.daily.size,0);
+});
