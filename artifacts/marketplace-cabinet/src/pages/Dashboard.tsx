@@ -848,6 +848,7 @@ export default function DashboardPage() {
           <span className="legend-item" key={key}>
             <span className={"stage-dot " + key} />
             {label}
+            {own.some(store=>chosen.stores.find(item=>item.id===store.id)?.data.reasons?.[key]==='Требуется Премиум на Озон') && <small className="card-sub" style={{display:'block'}}>Требуется Премиум на Озон</small>}
             <div className="metric-periods">
               <div>
                 <span>2 недели</span>
@@ -984,6 +985,10 @@ export default function DashboardPage() {
             <Market key={p} platform={p} />
           ))}
         </div>
+        {selected.filter(store=>store.marketplace==='ozon').map(store=>{
+          const subscription=chosen.stores.find(item=>item.id===store.id)?.data.subscription;
+          return <p className="card-sub" key={'subscription-'+store.id} title={subscription?.checkedAt ? 'Проверено по API Ozon: '+new Date(subscription.checkedAt).toLocaleString('ru-RU',{timeZone:'Asia/Yekaterinburg'}) : undefined}>{store.storeName} · Тариф Ozon: {subscription?.label??'Тариф уточняется'}</p>;
+        })}
         {loading && (
           <p role="status">Загружаем данные подключённых магазинов…</p>
         )}

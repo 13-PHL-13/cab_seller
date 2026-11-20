@@ -63,6 +63,7 @@ export function syncPolicy(url: string): { group: string; interval: number; ttl:
     return { group: `wb:${hostname}`, interval: 60_000, ttl: 6 * 3600_000 };
   }
   if (hostname === 'api-seller.ozon.ru') {
+    if(pathname==='/v1/seller/info')return {group:'ozon:subscription',interval:1000,ttl:3600_000};
     // 50/day baseline for analytics; use one shared budget for all dimensions.
     if (pathname === '/v1/analytics/data') return { group: 'ozon:analytics', interval: 60_000, ttl: 2 * 3600_000 };
     return { group: `ozon:${pathname}`, interval: 1000, ttl: pathname.includes('/finance/') ? 3600_000 : 6 * 3600_000 };
@@ -79,6 +80,7 @@ export function assertReplaySafe(url: string, method: string): void {
     'POST https://content-api.wildberries.ru/content/v2/get/cards/list',
     'GET https://discounts-prices-api.wildberries.ru/api/v2/list/goods/filter',
     'POST https://api-seller.ozon.ru/v1/analytics/data',
+    'POST https://api-seller.ozon.ru/v1/seller/info',
     'POST https://api-seller.ozon.ru/v1/finance/accrual/by-day',
     'POST https://api-seller.ozon.ru/v1/finance/realization/by-day',
     'POST https://api-seller.ozon.ru/v3/product/list',

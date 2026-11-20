@@ -9,6 +9,7 @@ export interface DashboardStore {
   storeName: string;
   marketplace: "ozon" | "wildberries";
   data: {
+    subscription?: {type:string;label:string;isPremium:boolean|null;advancedAnalytics:boolean|null;checkedAt:string|null};
     totals: Record<DashboardMetric, number | null>;
     daily: DashboardPoint[];
     reasons?: Partial<Record<DashboardMetric,string>>;
