@@ -1,4 +1,4 @@
-import { providerFetch, SyncDeferred, syncContext } from './sync-context.ts';
+import { providerFetch, SyncDeferred, SyncRejected, syncContext } from './sync-context.ts';
 import { createHash } from "node:crypto";
 type OzonCredentials = { clientId: string; apiKey: string };
 type WildberriesCredentials = { apiKey: string };
@@ -15,7 +15,7 @@ type DailyPoint = {
 export type MarketplaceSnapshot = {
   daily: Map<string, DailyPoint>;
   funnel: Omit<DailyPoint, "date" | "revenue">;
-  unavailable?: { sales?: string; funnel?: string };
+  unavailable?: { sales?: string; funnel?: string; views?: string; carts?: string; orders?: string; revenue?: string };
 };
 
 export class MarketplaceRateLimitError extends Error {
@@ -77,7 +77,7 @@ async function requestJson(
       signal: AbortSignal.timeout(20_000),
     });
   } catch (error) {
-    if (error instanceof SyncDeferred) throw error;
+    if (error instanceof SyncDeferred || error instanceof SyncRejected) throw error;
     throw new Error("Площадка не ответила. Попробуйте обновить данные позже.");
   }
 
@@ -180,9 +180,15 @@ export async function getOzonSnapshot(
     const date = dateKey(dimension["id"]);
     if (!date) continue;
 
-    if (metrics.length < 4 || metrics.slice(0,4).some(value => value === null || value === '' || !Number.isFinite(Number(value)))) {
-      throw new Error('Ozon: в аналитике отсутствуют обязательные показатели.');
-    }
+    const fields=['revenue','orders','views','carts'] as const;
+    const labels=['сумма заказов','заказанные товары','просмотры','добавления в корзину'];
+    fields.forEach((field,index)=>{
+      const value=metrics[index];
+      if(value===undefined || value===null || value==='' || !Number.isFinite(Number(value))) {
+        snapshot.unavailable??={};
+        snapshot.unavailable[field]=`Ozon не передал показатель «${labels[index]}».`;
+      }
+    });
     const point: DailyPoint = {
       date,
       revenue: asNumber(metrics[0]),

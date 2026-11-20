@@ -53,5 +53,29 @@ test('PostgreSQL queue survives restart, shares pages, honours 429 and credentia
     assert.equal(calls,2);
     // Rotated credentials cannot read the old result. Updating lastSyncAt can.
     await assert.rejects(sharedDataset({...connection,credentialsCiphertext:encryptCredentials({apiKey:'rotated-fixture'})},'snapshot',{from:'a',to:'b'}),SyncDeferred);
+    // A terminal failure in one source must not stop good sources refreshing,
+    // and its HTTP request must never be automatically replayed.
+    await pool.query('TRUNCATE marketplace_sync_jobs,marketplace_sync_pages,marketplace_sync_budgets');
+    let terminalCalls=0;
+    t.mock.method(globalThis,'fetch',async(url:string)=>{
+      terminalCalls++;
+      return url.includes('/supplier/sales') ? new Response('secret must not be stored',{status:403}) : new Response('{"value":2}');
+    });
+    const partialHandlers={...handlers,snapshot:async()=>{
+      const results=await Promise.allSettled([
+        providerFetch('https://statistics-api.wildberries.ru/api/v1/supplier/sales?dateFrom=terminal',{}),
+        providerFetch('https://seller-analytics-api.wildberries.ru/api/analytics/v3/sales-funnel/products',{method:'POST',body:'{}'}),
+      ]);
+      assert.equal(results[0].status,'rejected');assert.equal(results[1].status,'fulfilled');
+      return {daily:new Map(),unavailable:{sales:'HTTP 403'}};
+    }};
+    await sharedDataset(connection,'snapshot',{from:'terminal',to:'terminal'}).catch(()=>{});
+    await workOne(partialHandlers);
+    assert.equal(terminalCalls,2);
+    await pool.query("UPDATE marketplace_sync_jobs SET state='queued',next_attempt_at=now()");
+    await workOne(partialHandlers);
+    assert.equal(terminalCalls,2);
+    assert.equal((await sharedDataset(connection,'snapshot',{from:'terminal',to:'terminal'})).sync.state,'ready');
+    assert.equal((await pool.query("SELECT 1 FROM marketplace_sync_pages WHERE payload LIKE '%secret must not be stored%'")).rowCount,0);
   } finally { await pool.end(); }
 });

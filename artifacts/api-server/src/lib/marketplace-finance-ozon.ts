@@ -1,4 +1,4 @@
-import { providerFetch, SyncDeferred, syncContext } from './sync-context.ts';
+import { providerFetch, SyncDeferred, SyncRejected, syncContext } from './sync-context.ts';
 type RecordValue = Record<string, unknown>;
 
 export type OzonFinanceTotals = {
@@ -150,7 +150,7 @@ async function requestOzonAccrualDay(
       signal: AbortSignal.timeout(30_000),
     });
   } catch (error) {
-    if (error instanceof SyncDeferred) throw error;
+    if (error instanceof SyncDeferred || error instanceof SyncRejected) throw error;
     throw new Error("Финансовый API Ozon не ответил. Повторите попытку позже.");
   }
 

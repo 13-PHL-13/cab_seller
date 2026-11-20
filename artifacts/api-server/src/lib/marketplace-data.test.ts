@@ -18,9 +18,11 @@ test('WB funnel continues after the first 1000 products',async(t)=>{
   assert.deepEqual(offsets,[0,1000]);assert.equal(data.funnel.views,1001);
 });
 
-test('Ozon missing metrics are rejected instead of becoming verified zeroes',async(t)=>{
+test('Ozon missing metrics remain null while available metrics survive',async(t)=>{
   t.mock.method(globalThis,'fetch',async()=>new Response(JSON.stringify({result:{data:[{dimensions:[{id:today}],metrics:[100,null,5,2]}]}})));
-  await assert.rejects(getOzonSnapshot({clientId:'fixture',apiKey:'fixture'},today,today),/отсутствуют/);
+  const data=dashboardStoreData(await getOzonSnapshot({clientId:'fixture',apiKey:'fixture'},today,today),'ozon');
+  assert.equal(data.totals.orders,null);assert.equal(data.daily[0].orders,null);
+  assert.equal(data.totals.orderAmount,100);assert.equal(data.totals.views,5);assert.equal(data.totals.carts,2);
 });
 test('WB sales rows have no quantity: count sold units, exclude returns, fill verified zero days',async(t)=>{
   t.mock.method(globalThis,'fetch',async(url:string)=>new Response(JSON.stringify(url.includes('/supplier/sales') ? [
@@ -65,4 +67,12 @@ test('sales 429 retains the funnel and suppresses repeated calls until retry tim
     assert.equal(data.totals.views,20);assert.equal(data.totals.bought,null);
     assert.equal(data.totals.boughtAmount,null);assert.equal(data.daily.length,0);
   }
+});
+
+
+test('Ozon unavailable views do not erase orders or masquerade as zero views',async(t)=>{
+  t.mock.method(globalThis,'fetch',async()=>new Response(JSON.stringify({result:{data:[{dimensions:[{id:today}],metrics:[100,3,null,null]}]}})));
+  const data=dashboardStoreData(await getOzonSnapshot({clientId:'fixture',apiKey:'fixture'},today,today),'ozon');
+  assert.equal(data.totals.orders,3);assert.equal(data.totals.orderAmount,100);
+  assert.equal(data.totals.views,null);assert.equal(data.daily[0].views,null);assert.equal(data.totals.carts,null);
 });

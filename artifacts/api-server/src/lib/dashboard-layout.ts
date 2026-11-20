@@ -21,11 +21,11 @@ export function dashboardStoreData(
   const ozon = platform === "ozon";
   return {
     totals: {
-      views: snapshot.unavailable?.funnel ? null : snapshot.funnel.views as number | null,
-      carts: snapshot.unavailable?.funnel ? null : snapshot.funnel.cartAdds as number | null,
-      orders: ozon ? snapshot.funnel.orders : null,
+      views: snapshot.unavailable?.funnel || snapshot.unavailable?.views ? null : snapshot.funnel.views as number | null,
+      carts: snapshot.unavailable?.funnel || snapshot.unavailable?.carts ? null : snapshot.funnel.cartAdds as number | null,
+      orders: ozon && !snapshot.unavailable?.orders ? snapshot.funnel.orders : null,
       bought: ozon || snapshot.unavailable?.sales ? null : [...snapshot.daily.values()].reduce((n,p)=>n+p.units,0),
-      orderAmount: ozon
+      orderAmount: ozon && !snapshot.unavailable?.revenue
         ? [...snapshot.daily.values()].reduce((n, p) => n + p.revenue, 0)
         : null,
       boughtAmount: ozon || snapshot.unavailable?.sales
@@ -34,11 +34,11 @@ export function dashboardStoreData(
     },
     daily: [...snapshot.daily.values()].map((p) => ({
       date: p.date,
-      views: ozon ? p.views : null,
-      carts: ozon ? p.cartAdds : null,
-      orders: ozon ? p.orders : null,
+      views: ozon && !snapshot.unavailable?.views ? p.views : null,
+      carts: ozon && !snapshot.unavailable?.carts ? p.cartAdds : null,
+      orders: ozon && !snapshot.unavailable?.orders ? p.orders : null,
       bought: ozon ? null : p.units,
-      orderAmount: ozon ? p.revenue : null,
+      orderAmount: ozon && !snapshot.unavailable?.revenue ? p.revenue : null,
       boughtAmount: ozon ? null : p.revenue,
     })),
   };
