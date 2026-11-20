@@ -1,3 +1,4 @@
+import { providerFetch, SyncDeferred, syncContext } from './sync-context.ts';
 import { createHash } from "node:crypto";
 type OzonCredentials = { clientId: string; apiKey: string };
 type WildberriesCredentials = { apiKey: string };
@@ -71,11 +72,12 @@ async function requestJson(
   if(retryAt>Date.now())throw new MarketplaceRateLimitError(Math.ceil((retryAt-Date.now())/1000));
   let response: Response;
   try {
-    response = await fetch(url, {
+    response = await providerFetch(url, {
       ...init,
       signal: AbortSignal.timeout(20_000),
     });
-  } catch {
+  } catch (error) {
+    if (error instanceof SyncDeferred) throw error;
     throw new Error("Площадка не ответила. Попробуйте обновить данные позже.");
   }
 
@@ -124,7 +126,8 @@ function emptySnapshot(): MarketplaceSnapshot {
 
 function getOzonRows(response: Record<string, unknown>): unknown[] {
   const result = asRecord(response["result"]);
-  return asArray(result["data"]);
+  if (!Array.isArray(result["data"])) throw new Error("Ozon: не получен список строк аналитики.");
+  return result["data"];
 }
 
 async function requestOzon(
@@ -154,8 +157,11 @@ async function requestOzon(
 export async function verifyOzonCredentials(
   credentials: OzonCredentials,
 ): Promise<void> {
-  const { from, to } = dateRange("7d");
-  await requestOzon(credentials, from, to);
+  // Credential checks must not spend the much smaller analytics budget.
+  await requestJson('https://api-seller.ozon.ru/v1/roles', {
+    method: 'POST', headers: { 'Content-Type': 'application/json', 'Client-Id': credentials.clientId, 'Api-Key': credentials.apiKey },
+    body: '{}',
+  });
 }
 
 export async function getOzonSnapshot(
@@ -174,6 +180,9 @@ export async function getOzonSnapshot(
     const date = dateKey(dimension["id"]);
     if (!date) continue;
 
+    if (metrics.length < 4 || metrics.slice(0,4).some(value => value === null || value === '' || !Number.isFinite(Number(value)))) {
+      throw new Error('Ozon: в аналитике отсутствуют обязательные показатели.');
+    }
     const point: DailyPoint = {
       date,
       revenue: asNumber(metrics[0]),
@@ -199,6 +208,8 @@ async function requestWildberriesFunnel(
   from: string,
   to: string,
 ): Promise<Record<string, unknown>> {
+  const cards: unknown[] = [];
+  for (let offset = 0; ; offset += 1000) {
   const response = await requestJson(
     "https://seller-analytics-api.wildberries.ru/api/analytics/v3/sales-funnel/products",
     {
@@ -213,13 +224,15 @@ async function requestWildberriesFunnel(
         skipDeletedNm: false,
         orderBy: { field: "openCard", mode: "desc" },
         limit: 1000,
-        offset: 0,
+        offset,
       }),
     },
   );
 
-  const cards=wildberriesCards(response);
-  if(cards.length>=1000)throw new Error('Воронка ВБ получена не полностью: требуется продолжение списка товаров.');
+  const page = wildberriesCards(response);
+  cards.push(...page);
+  if (page.length < 1000) break;
+  }
   return { data: { cards } };
 }
 
@@ -229,9 +242,10 @@ async function requestWildberriesSales(
 ): Promise<unknown[]> {
   // Both dashboard windows consume the same raw feed. Share that request;
   // supplier/sales has a much stricter quota than the analytics endpoint.
-  const rollingStart = new Date(Date.now()-28*86400000).toISOString().slice(0,10);
+  const rollingStart = new Date(Date.now()-90*86400000).toISOString().slice(0,10);
   const sourceFrom = from < rollingStart ? from : rollingStart;
   const key=createHash('sha256').update(credentials.apiKey).update(sourceFrom).digest('hex');
+  if (syncContext.getStore()) return loadWildberriesSales(credentials, sourceFrom);
   const cached=wbSalesCache.get(key);
   if(cached && cached.expiresAt>Date.now())return cached.rows;
   const pending=wbSalesRequests.get(key);
@@ -246,24 +260,32 @@ async function requestWildberriesSales(
 const wbSalesCache=new Map<string,{rows:unknown[];expiresAt:number}>();
 const wbSalesRequests=new Map<string,Promise<unknown[]>>();
 async function loadWildberriesSales(credentials: WildberriesCredentials,from:string):Promise<unknown[]> {
-  const response = await requestJson(
-    `https://statistics-api.wildberries.ru/api/v1/supplier/sales?dateFrom=${encodeURIComponent(from)}&flag=0`,
-    {
-      method: "GET",
-      headers: { Authorization: credentials.apiKey },
-    },
-  );
-  const rows=Array.isArray(response["data"])
-    ? asArray(response["data"])
-    : asArray(response);
-  if(rows.length>=80_000)throw new Error('Отчёт продаж ВБ получен не полностью. Требуется продолжение выгрузки.');
-  return rows;
+  const sales = new Map<string, unknown>();
+  let cursor = from;
+  for (;;) {
+    const response = await requestJson(
+      `https://statistics-api.wildberries.ru/api/v1/supplier/sales?dateFrom=${encodeURIComponent(cursor)}&flag=0`,
+      { method: "GET", headers: { Authorization: credentials.apiKey } },
+    );
+    const rows = asArray(response.data);
+    for (const raw of rows) {
+      const sale = asRecord(raw);
+      if (typeof sale.saleID !== 'string') throw new Error('ВБ: в строке продажи отсутствует идентификатор.');
+      sales.set(sale.saleID, raw);
+    }
+    if (rows.length < 80_000) break;
+    const next = asRecord(rows[rows.length - 1]).lastChangeDate;
+    if (typeof next !== 'string' || next <= cursor) throw new Error('ВБ: курсор продаж не продвинулся; выгрузка не завершена.');
+    cursor = next;
+  }
+  return [...sales.values()];
 }
 
 function wildberriesCards(response: Record<string, unknown>): unknown[] {
   const data = asRecord(response["data"]);
   const cards = asArray(data["cards"] ?? data["products"]);
   if (cards.length > 0) return cards;
+  if (!Array.isArray(response["data"]) && !Array.isArray(data["cards"]) && !Array.isArray(data["products"])) throw new Error("ВБ: не получен список товаров воронки.");
   return asArray(response["data"]);
 }
 
@@ -282,6 +304,7 @@ function readWildberriesFunnel(
       Object.keys(selected).length > 0
         ? selected
         : asRecord(card["selectedPeriod"]);
+    if (['openCount','cartCount','orderCount','buyoutCount'].some(key => metrics[key] === undefined || metrics[key] === null || !Number.isFinite(Number(metrics[key])))) throw new Error('ВБ: в воронке отсутствуют обязательные показатели.');
     total.views += asNumber(metrics["openCount"]);
     total.cartAdds += asNumber(metrics["cartCount"]);
     total.orders += asNumber(metrics["orderCount"]);

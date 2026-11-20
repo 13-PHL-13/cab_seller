@@ -8,6 +8,20 @@ on:
 jobs:
   validate:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: sync_test
+          POSTGRES_PASSWORD: ephemeral_ci_only
+          POSTGRES_DB: marketplace_sync_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U sync_test -d marketplace_sync_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -24,6 +38,10 @@ jobs:
         run: pnpm install --no-frozen-lockfile
       - name: API unit tests
         run: pnpm --filter @workspace/api-server test
+      - name: Durable marketplace queue integration tests
+        env:
+          TEST_DATABASE_URL: postgresql://sync_test:ephemeral_ci_only@localhost:5432/marketplace_sync_test
+        run: pnpm --filter @workspace/api-server test:sync-db
       - name: Dashboard data model tests
         run: pnpm --filter @workspace/marketplace-cabinet test
       - name: Typecheck and build

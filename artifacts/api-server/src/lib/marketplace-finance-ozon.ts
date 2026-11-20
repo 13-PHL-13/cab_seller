@@ -1,3 +1,4 @@
+import { providerFetch, SyncDeferred, syncContext } from './sync-context.ts';
 type RecordValue = Record<string, unknown>;
 
 export type OzonFinanceTotals = {
@@ -66,15 +67,20 @@ function extractSoldItems(rows: unknown[]) {
 }
 
 async function getOzonOrderedBySku(credentials: { clientId: string; apiKey: string }, from: string, to: string) {
-  const response = await fetch("https://api-seller.ozon.ru/v1/analytics/data", {
+  const rows: unknown[] = [];
+  for (let offset = 0; ; offset += 1000) {
+  const response = await providerFetch("https://api-seller.ozon.ru/v1/analytics/data", {
     method: "POST",
     headers: { "Content-Type": "application/json", "Client-Id": credentials.clientId, "Api-Key": credentials.apiKey },
-    body: JSON.stringify({ date_from: from, date_to: to, dimension: ["sku"], metrics: ["ordered_units"], filters: [], limit: 1000, offset: 0 }),
+    body: JSON.stringify({ date_from: from, date_to: to, dimension: ["sku"], metrics: ["ordered_units"], filters: [], limit: 1000, offset }),
     signal: AbortSignal.timeout(30_000),
   });
   if (!response.ok) throw new Error(`Ozon Analytics API вернул HTTP ${response.status} для отчёта по SKU.`);
   const payload = asRecord(await response.json());
-  const rows = asArray(asRecord(payload.result).data);
+  const page = asArray(asRecord(payload.result).data);
+  rows.push(...page);
+  if (page.length < 1000) break;
+  }
   const quantities = new Map<string, number>();
   for (const raw of rows) {
     const row = asRecord(raw);
@@ -133,7 +139,7 @@ async function requestOzonAccrualDay(
 ): Promise<{ accruals: unknown[]; lastId: string }> {
   let response: Response;
   try {
-    response = await fetch("https://api-seller.ozon.ru/v1/finance/accrual/by-day", {
+    response = await providerFetch("https://api-seller.ozon.ru/v1/finance/accrual/by-day", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -143,7 +149,8 @@ async function requestOzonAccrualDay(
       body: JSON.stringify({ date, last_id: lastId }),
       signal: AbortSignal.timeout(30_000),
     });
-  } catch {
+  } catch (error) {
+    if (error instanceof SyncDeferred) throw error;
     throw new Error("Финансовый API Ozon не ответил. Повторите попытку позже.");
   }
 
@@ -189,27 +196,21 @@ export async function getOzonFinanceReport(
   to: string,
 ): Promise<OzonFinanceResult> {
   const rows: unknown[] = [];
-  const maxPagesPerDay = 20;
-  let totalPages = 0;
+
 
   // Ozon explicitly requires sequential requests for its new accrual methods.
   for (const date of datesInRange(from, to)) {
     let lastId = "";
-    for (let page = 0; page < maxPagesPerDay; page += 1) {
-      if (totalPages >= 50) {
-        throw new Error("Ozon: превышен общий лимит страниц финансового отчёта. Сузьте период.");
-      }
-      totalPages += 1;
+    const seenCursors = new Set<string>();
+    for (;;) {
       const result = await requestOzonAccrualDay(credentials, date, lastId);
       rows.push(...result.accruals);
       if (!result.accruals.length || !result.lastId) break;
-      if (result.lastId === lastId) {
+      if (seenCursors.has(result.lastId) || result.lastId === lastId) {
         throw new Error(`Ozon: курсор пагинации не изменился для даты ${date}. Отчёт не был завершён.`);
       }
+      seenCursors.add(result.lastId);
       lastId = result.lastId;
-      if (page === maxPagesPerDay - 1) {
-        throw new Error(`Ozon: превышен лимит страниц начислений за ${date}. Отчёт не был завершён.`);
-      }
     }
   }
 

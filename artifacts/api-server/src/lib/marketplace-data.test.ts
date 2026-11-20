@@ -1,11 +1,27 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { getWildberriesSnapshot } from './marketplace-data.ts';
+import { getWildberriesSnapshot, getOzonSnapshot } from './marketplace-data.ts';
 import { dashboardStoreData } from './dashboard-layout.ts';
 
 const today=new Date().toISOString().slice(0,10);
 const yesterday=new Date(Date.now()-86400000).toISOString().slice(0,10);
 const funnel={data:{products:[{statistics:{selected:{openCount:20,cartCount:8,orderCount:5,buyoutCount:3}}}]}};
+
+test('WB funnel continues after the first 1000 products',async(t)=>{
+  const offsets:number[]=[];
+  t.mock.method(globalThis,'fetch',async(url:string,init?:RequestInit)=>{
+    if(url.includes('/supplier/sales'))return new Response('[]');
+    const offset=JSON.parse(String(init?.body)).offset;offsets.push(offset);
+    return new Response(JSON.stringify({data:{products:Array.from({length:offset===0?1000:1},()=>({statistics:{selected:{openCount:1,cartCount:0,orderCount:0,buyoutCount:0}}}))}}));
+  });
+  const data=await getWildberriesSnapshot({apiKey:'fixture-pagination'},today,today);
+  assert.deepEqual(offsets,[0,1000]);assert.equal(data.funnel.views,1001);
+});
+
+test('Ozon missing metrics are rejected instead of becoming verified zeroes',async(t)=>{
+  t.mock.method(globalThis,'fetch',async()=>new Response(JSON.stringify({result:{data:[{dimensions:[{id:today}],metrics:[100,null,5,2]}]}})));
+  await assert.rejects(getOzonSnapshot({clientId:'fixture',apiKey:'fixture'},today,today),/отсутствуют/);
+});
 test('WB sales rows have no quantity: count sold units, exclude returns, fill verified zero days',async(t)=>{
   t.mock.method(globalThis,'fetch',async(url:string)=>new Response(JSON.stringify(url.includes('/supplier/sales') ? [
     {date:today,saleID:'S1',finishedPrice:100},

@@ -14,10 +14,12 @@ export default function FunnelPage() {
   useEffect(() => {
     let active = true;
     setLoading(true);
-    getMarketplaceDashboard(period, platform).then((value) => { if (active) { setData(value); setError(""); } })
+    const refresh = () => { void getMarketplaceDashboard(period, platform).then((value) => { if (active) { setData(value); setError(""); } })
       .catch((reason) => { if (active) { setData(null); setError(formatApiError(reason)); } })
-      .finally(() => { if (active) setLoading(false); });
-    return () => { active = false; };
+      .finally(() => { if (active) setLoading(false); }); };
+    refresh();
+    const timer = window.setInterval(refresh, 30_000);
+    return () => { active = false; window.clearInterval(timer); };
   }, [period, platform]);
   const rows = data?.funnels ?? [];
   return <>

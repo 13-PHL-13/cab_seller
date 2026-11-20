@@ -86,6 +86,8 @@ export interface MarketplaceDashboard {
   partialErrors: string[];
 }
 
+export class MarketplaceSyncPendingError extends Error {}
+
 async function apiRequest<T>(path: string, init?: RequestInit): Promise<T> {
   let response: Response;
   try {
@@ -109,6 +111,7 @@ async function apiRequest<T>(path: string, init?: RequestInit): Promise<T> {
         : response.status === 401
           ? "Необходимо войти в аккаунт."
           : `Ошибка сервера (${response.status}).`;
+    if (payload && typeof payload === 'object' && 'syncPending' in payload && payload.syncPending === true) throw new MarketplaceSyncPendingError(message);
     throw new Error(message);
   }
   return payload as T;

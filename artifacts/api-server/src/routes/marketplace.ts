@@ -1,3 +1,5 @@
+import { SyncDeferred, mergeSyncStatuses } from '../lib/sync-context';
+import { sharedDataset, sharedSnapshot, datasetStatuses } from '../lib/marketplace-sync';
 import { getOzonFinanceReport } from "../lib/marketplace-finance-ozon";
 import { getWildberriesFinanceReport } from "../lib/marketplace-finance";
 import {
@@ -13,7 +15,6 @@ import {
 import { db, aiConversationsTable, aiMessagesTable, cogsProductsTable, marketplaceConnectionsTable, sellerExpensesTable } from "@workspace/db";
 import { routerBalance } from '../lib/ai-balance';
 import { dashboardWindow, dashboardStoreData } from '../lib/dashboard-layout';
-import { createHash } from 'node:crypto';
 import { cogsProductMarketplacesTable } from "@workspace/db/schema";
 import { and, asc, desc, eq, gte, inArray, lte, sql } from "drizzle-orm";
 import { Router, type IRouter } from "express";
@@ -24,9 +25,6 @@ import {
   encryptCredentials,
 } from "../lib/marketplace-credentials";
 import {
-  getOzonSnapshot,
-  getWildberriesSnapshot,
-  MarketplaceRateLimitError,
   periodDates,
   verifyOzonCredentials,
   verifyWildberriesCredentials,
@@ -44,64 +42,6 @@ type ConnectionCredentials =
 type AiAssistantCredentials = { baseUrl: string; apiKey: string; model: string };
 
 const AI_CONNECTION_ID = "ai-assistant";
-
-const DASHBOARD_CACHE_TTL = 5 * 60 * 1000;
-
-const dashboardCache = new Map<
-  string,
-  { snapshot: MarketplaceSnapshot; expiresAt: number }
->();
-
-const dashboardRequests = new Map<
-  string,
-  Promise<MarketplaceSnapshot>
->();
-const marketplaceCooldowns = new Map<string, number>();
-const FINANCE_CACHE_TTL = 10 * 60 * 1000;
-const financeCache = new Map<string, { value: unknown; expiresAt: number }>();
-const financeRequests = new Map<string, Promise<unknown>>();
-
-async function getCachedFinance<T>(key: string, loader: () => Promise<T>): Promise<T> {
-  const cached = financeCache.get(key);
-  if (cached && cached.expiresAt > Date.now()) return cached.value as T;
-  const pending = financeRequests.get(key);
-  if (pending) return pending as Promise<T>;
-  const request = loader().then((value) => {
-    financeCache.set(key, { value, expiresAt: Date.now() + FINANCE_CACHE_TTL });
-    return value;
-  }).finally(() => financeRequests.delete(key));
-  financeRequests.set(key, request);
-  return request;
-}
-
-async function getCachedSnapshot(
-  key: string,
-  loader: () => Promise<MarketplaceSnapshot>,
-): Promise<MarketplaceSnapshot> {
-  const cached = dashboardCache.get(key);
-
-  if (cached && cached.expiresAt > Date.now()) {
-    return cached.snapshot;
-  }
-
-  const pending = dashboardRequests.get(key);
-  if (pending) return pending;
-
-  const request = loader()
-    .then((snapshot) => {
-      dashboardCache.set(key, {
-        snapshot,
-        expiresAt: Date.now() + (snapshot.unavailable && Object.keys(snapshot.unavailable).length ? 60_000 : DASHBOARD_CACHE_TTL),
-      });
-      return snapshot;
-    })
-    .finally(() => {
-      dashboardRequests.delete(key);
-    });
-
-  dashboardRequests.set(key, request);
-  return request;
-}
 
 const router: IRouter = Router();
 router.use("/marketplace", requireUser);
@@ -453,6 +393,14 @@ async function findConnections(ownerId: string, marketplace: Marketplace, storeI
     .orderBy(asc(marketplaceConnectionsTable.id));
 }
 
+router.get('/marketplace/sync-status', requireCompanySection('dashboard'), async (req,res):Promise<void>=>{
+  const visible = (await Promise.all((['ozon','wildberries'] as const).map(marketplace =>
+    findConnections(companyIdFromRequest(req), marketplace, storeIdFromRequest(req), allowedStoreIds(req))
+  ))).flatMap(connections=>connections??[]);
+  res.setHeader('Cache-Control','private, no-store');
+  res.json({datasets:await datasetStatuses(visible.map(connection=>connection.id))});
+});
+
 async function saveConnection(
   ownerId: string,
   companyId: string,
@@ -730,25 +678,15 @@ router.get("/marketplace/dashboard", async (req, res): Promise<void> => {
       const combined = zeroSnapshot();
       for (const connection of connections) {
         try {
-          const cooldownKey = `${companyIdFromRequest(req)}:${target}:${connection.id}`;
-          const cooldownUntil = Math.max(
-            marketplaceCooldowns.get(cooldownKey) ?? 0,
-            connection.analyticsRetryAt?.getTime() ?? 0,
-          );
-          if (req.query.layout !== 'prototype' && cooldownUntil > Date.now()) {
-            const remainingSeconds = Math.ceil((cooldownUntil - Date.now()) / 1000);
-            const wait = remainingSeconds >= 3600 ? `${Math.ceil(remainingSeconds / 3600)} ч.` : remainingSeconds >= 60 ? `${Math.ceil(remainingSeconds / 60)} мин.` : `${remainingSeconds} сек.`;
-            partialErrors.push(`${target === "ozon" ? "Ozon" : "ВБ"} · ${connection.storeName}: API временно ограничил запросы. Повторите через ${wait}.`);
-            continue;
-          }
-          const cacheKey = [companyIdFromRequest(req), target, connection.id, req.query.layout === 'prototype' ? createHash('sha256').update(connection.credentialsCiphertext).digest('hex') : connection.updatedAt.getTime(), from, to].join(":");
-          const credentials = decryptCredentials<Record<string, string>>(connection.credentialsCiphertext);
           // Ozon validates against its server day, which may lag the company calendar.
           const requestTo = target === 'ozon' && req.query.layout === 'prototype'
             ? [to, new Date().toISOString().slice(0, 10)].sort()[0] : to;
-          const snapshot = await getCachedSnapshot(cacheKey, () => target === "ozon"
-            ? getOzonSnapshot(credentials as { clientId: string; apiKey: string }, from, requestTo)
-            : getWildberriesSnapshot(credentials as { apiKey: string }, from, to, req.query.layout === 'prototype'));
+          const snapshot = await sharedSnapshot(connection, from, requestTo);
+          if (snapshot.sync.stale) {
+            const asOf = snapshot.sync.updatedAt ? new Date(snapshot.sync.updatedAt).toLocaleString('ru-RU', {timeZone:'Asia/Yekaterinburg'}) : 'частичной загрузки';
+            const update = snapshot.sync.state==='blocked' ? 'Обновление остановлено: нужна проверка ответа площадки и прав ключа.' : `Следующая проверка — ${new Date(snapshot.sync.nextAttemptAt).toLocaleString('ru-RU', {timeZone:'Asia/Yekaterinburg'})}.`;
+            partialErrors.push(`${target === "ozon" ? "Ozon" : "ВБ"} · ${connection.storeName}: показаны данные ${asOf}. ${update}`);
+          }
           const detail = dashboardStoreData(snapshot,target);
           for(const warning of Object.values(snapshot.unavailable??{}))partialErrors.push(`${target === "ozon" ? "Ozon" : "ВБ"} · ${connection.storeName}: ${warning}`);
           if (requestTo !== to) {
@@ -768,21 +706,9 @@ router.get("/marketplace/dashboard", async (req, res): Promise<void> => {
           }
           combined.funnel.views += snapshot.funnel.views; combined.funnel.cartAdds += snapshot.funnel.cartAdds;
           combined.funnel.orders += snapshot.funnel.orders; combined.funnel.units += snapshot.funnel.units;
-          await db.update(marketplaceConnectionsTable).set({ lastSyncAt: new Date(), analyticsRetryAt: null }).where(eq(marketplaceConnectionsTable.id, connection.id));
+
         } catch (error) {
-          if (target === "wildberries" && error instanceof MarketplaceRateLimitError) {
-            const retryAt = new Date(Date.now() + error.retryAfterSeconds * 1000);
-            marketplaceCooldowns.set(`${companyIdFromRequest(req)}:${target}:${connection.id}`, retryAt.getTime());
-            await db.update(marketplaceConnectionsTable).set({ analyticsRetryAt: retryAt }).where(and(
-              eq(marketplaceConnectionsTable.id, connection.id),
-              eq(marketplaceConnectionsTable.companyId, companyIdFromRequest(req)),
-            ));
-            const wait = error.retryAfterSeconds >= 3600 ? `${Math.ceil(error.retryAfterSeconds / 3600)} ч.` : error.retryAfterSeconds >= 60 ? `${Math.ceil(error.retryAfterSeconds / 60)} мин.` : `${error.retryAfterSeconds} сек.`;
-            partialErrors.push(`ВБ · ${connection.storeName}: API временно ограничил запросы (429). Подключение активно; повторите через ${wait}.`);
-          } else {
-            req.log.warn({ marketplace: target, storeId: connection.id }, "Marketplace data request failed");
-            partialErrors.push(`${target === "ozon" ? "Ozon" : "ВБ"} · ${connection.storeName}: ${errorMessage(error)}`);
-          }
+          partialErrors.push(`${target === "ozon" ? "Ozon" : "ВБ"} · ${connection.storeName}: ${errorMessage(error)}`);
         }
       }
       snapshots.set(target, combined);
@@ -886,17 +812,10 @@ router.get("/marketplace/finance/wildberries", async (req, res): Promise<void> =
   }
 
   try {
-    const reports: Array<Awaited<ReturnType<typeof getWildberriesFinanceReport>>> = [];
-    for (const connection of connections) {
-      const credentials = decryptCredentials<{ apiKey: string }>(connection.credentialsCiphertext);
-      reports.push(await getCachedFinance(
-        `${companyIdFromRequest(req)}:wildberries:${connection.id}:${connection.updatedAt.getTime()}:${from}:${to}`,
-        () => getWildberriesFinanceReport(credentials.apiKey, from, to),
-      ));
-    }
+    const reports = await Promise.all(connections.map(connection => sharedDataset<Awaited<ReturnType<typeof getWildberriesFinanceReport>>>(connection, "finance", { from, to })));
     const totalKeys = Object.keys(reports[0]!.totals) as Array<keyof typeof reports[number]["totals"]>;
     const report = {
-      ...reports[0]!, rowsCount: reports.reduce((sum, item) => sum + item.rowsCount, 0),
+      ...reports[0]!, sync: mergeSyncStatuses(reports.map(item=>item.sync)), rowsCount: reports.reduce((sum, item) => sum + item.rowsCount, 0),
       incomplete: reports.some((item) => item.incomplete), soldItems: reports.flatMap((item) => item.soldItems),
       totals: Object.fromEntries(totalKeys.map((key) => [key, reports.reduce((sum, item) => sum + item.totals[key], 0)])) as typeof reports[number]["totals"],
     };
@@ -939,14 +858,14 @@ router.get("/marketplace/finance/wildberries", async (req, res): Promise<void> =
       unmatchedUnits,
       costOfGoods: Math.round(costOfGoods * 100) / 100,
     };
-    await Promise.all(connections.map((connection) => db.update(marketplaceConnectionsTable).set({ lastSyncAt: new Date() }).where(and(
-      eq(marketplaceConnectionsTable.id, connection.id), eq(marketplaceConnectionsTable.companyId, companyIdFromRequest(req)),
-    ))));
     req.log.info({ marketplace: "wildberries", rows: report.rowsCount }, "Finance report loaded");
     res.json(report);
   } catch (error) {
     req.log.warn({ marketplace: "wildberries" }, "Finance report request failed");
-    res.status(502).json({ error: errorMessage(error) });
+    if (error instanceof SyncDeferred) {
+      res.setHeader('Retry-After', String(Math.max(1, Math.ceil((error.retryAt-Date.now())/1000))));
+      res.status(503).json({ error: error.message, syncPending: true, nextAttemptAt: new Date(error.retryAt).toISOString() });
+    } else res.status(502).json({ error: errorMessage(error) });
   }
 });
 
@@ -982,17 +901,10 @@ router.get("/marketplace/finance/ozon", async (req, res): Promise<void> => {
   }
 
   try {
-    const reports: Array<Awaited<ReturnType<typeof getOzonFinanceReport>>> = [];
-    for (const connection of connections) {
-      const credentials = decryptCredentials<{ clientId: string; apiKey: string }>(connection.credentialsCiphertext);
-      reports.push(await getCachedFinance(
-        `${companyIdFromRequest(req)}:ozon:${connection.id}:${connection.updatedAt.getTime()}:${from}:${to}`,
-        () => getOzonFinanceReport(credentials, from, to),
-      ));
-    }
+    const reports = await Promise.all(connections.map(connection => sharedDataset<Awaited<ReturnType<typeof getOzonFinanceReport>>>(connection, "finance", { from, to })));
     const totalKeys = Object.keys(reports[0]!.totals) as Array<keyof typeof reports[number]["totals"]>;
     const report: typeof reports[number] & { catalogCost: { matchedUnits: number; unmatchedUnits: number; costOfGoods: number } } = {
-      ...reports[0]!, soldItems: reports.flatMap((item) => item.soldItems), productSalesError: reports.find((item) => item.productSalesError)?.productSalesError ?? null, productSalesMetric: reports.some((item) => item.productSalesMetric === "ordered_units") ? "ordered_units" : null, totals: Object.fromEntries(totalKeys.map((key) => [key, reports.reduce((sum, item) => sum + item.totals[key], 0)])) as typeof reports[number]["totals"],
+      ...reports[0]!, sync: mergeSyncStatuses(reports.map(item=>item.sync)), soldItems: reports.flatMap((item) => item.soldItems), productSalesError: reports.find((item) => item.productSalesError)?.productSalesError ?? null, productSalesMetric: reports.some((item) => item.productSalesMetric === "ordered_units") ? "ordered_units" : null, totals: Object.fromEntries(totalKeys.map((key) => [key, reports.reduce((sum, item) => sum + item.totals[key], 0)])) as typeof reports[number]["totals"],
       catalogCost: { matchedUnits: 0, unmatchedUnits: 0, costOfGoods: 0 },
     };
     const [catalogProducts, marketplaceProducts] = await Promise.all([
@@ -1019,14 +931,14 @@ router.get("/marketplace/finance/ozon", async (req, res): Promise<void> => {
       else { matchedUnits += item.quantity; costOfGoods += Number(product.unitCost) * item.quantity; }
     }
     report.catalogCost = { matchedUnits, unmatchedUnits, costOfGoods: Math.round(costOfGoods * 100) / 100 };
-    await Promise.all(connections.map((connection) => db.update(marketplaceConnectionsTable).set({ lastSyncAt: new Date() }).where(and(
-      eq(marketplaceConnectionsTable.id, connection.id), eq(marketplaceConnectionsTable.companyId, companyIdFromRequest(req)),
-    ))));
     req.log.info({ marketplace: "ozon", accruals: report.totals.accrualsCount }, "Finance report loaded");
     res.json(report);
   } catch (error) {
     req.log.warn({ marketplace: "ozon" }, "Finance report request failed");
-    res.status(502).json({ error: errorMessage(error) });
+    if (error instanceof SyncDeferred) {
+      res.setHeader('Retry-After', String(Math.max(1, Math.ceil((error.retryAt-Date.now())/1000))));
+      res.status(503).json({ error: error.message, syncPending: true, nextAttemptAt: new Date(error.retryAt).toISOString() });
+    } else res.status(502).json({ error: errorMessage(error) });
   }
 });
 

@@ -2,6 +2,8 @@ import app from "./app";
 import { logger } from "./lib/logger";
 import { ensureCollaborationSchema } from './lib/collaboration-schema';
 import { ensureCommerceSchema } from './routes/commerce';
+import { ensureMarketplaceSyncSchema, startMarketplaceSync } from './lib/marketplace-sync';
+import { syncHandlers } from './lib/sync-handlers';
 
 const rawPort = process.env["PORT"];
 
@@ -19,6 +21,9 @@ if (Number.isNaN(port) || port <= 0) {
 
 await ensureCollaborationSchema();
 await ensureCommerceSchema();
+await ensureMarketplaceSyncSchema();
+const stopMarketplaceSync = startMarketplaceSync(syncHandlers);
+process.once('SIGTERM', stopMarketplaceSync);
 
 app.listen(port, (err) => {
   if (err) {
