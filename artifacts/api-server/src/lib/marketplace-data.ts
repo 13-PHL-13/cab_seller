@@ -336,7 +336,7 @@ function readWildberriesFunnel(
   const total = { orders: 0, units: 0, views: 0, cartAdds: 0, orderAmount: 0 as number|null };
   for (const rawCard of wildberriesCards(response)) {
     const card = asRecord(rawCard);
-    const statistics = asRecord(card["statistics"]);
+    const statistics = asRecord(card["statistic"] ?? card["statistics"]);
     const selected =
       asRecord(statistics["selectedPeriod"]).openCount !== undefined
         ? asRecord(statistics["selectedPeriod"])
@@ -345,7 +345,7 @@ function readWildberriesFunnel(
       Object.keys(selected).length > 0
         ? selected
         : asRecord(card["selectedPeriod"]);
-    if (['openCount','cartCount','orderCount','buyoutCount'].some(key => metrics[key] === undefined || metrics[key] === null || !Number.isFinite(Number(metrics[key])))) throw new Error('ВБ: в воронке отсутствуют обязательные показатели.');
+    if (['openCount','cartCount','orderCount','buyoutCount'].some(key => metrics[key] === undefined || metrics[key] === null || !Number.isFinite(Number(metrics[key])))) throw new Error('ВБ: в ответе statistic.selected отсутствуют обязательные показатели воронки.');
     total.views += asNumber(metrics["openCount"]);
     total.cartAdds += asNumber(metrics["cartCount"]);
     total.orders += asNumber(metrics["orderCount"]);

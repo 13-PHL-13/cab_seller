@@ -13,6 +13,7 @@ export type OzonFinanceTotals = {
 };
 
 export type OzonFinanceResult = {
+  dashboardVersion?:number;
   dashboardDiagnostics?: ReturnType<typeof ozonAccrualShape>;
   dashboard?: {revenue:number|null;expenses:number|null;commission:number|null;logistics:number|null;other:number|null};
   marketplace: "ozon";
@@ -146,13 +147,19 @@ export function ozonDashboardFinance(rows:unknown[]) {
     if(row.accrued_category!=='POSTING')continue;
     const products=asArray(asRecord(row.posting).products);
     if(!products.length)complete=false;
+    // Delivery-only accruals have no commission/sale object. They establish
+    // zero realized sales only when their delivery sums reconcile to the
+    // complete row amount; a missing sale field on a sale row stays unknown.
+    const deliveryOnly=products.length>0&&products.every(rawProduct=>{
+      const product=asRecord(rawProduct);return Object.keys(asRecord(product.commission)).length===0&&amount(asRecord(asRecord(product.delivery).total_accrued).amount)!==null;
+    })&&round(products.reduce<number>((sum,rawProduct)=>sum+(amount(asRecord(asRecord(asRecord(rawProduct).delivery).total_accrued).amount)??0),0))===amount(money.amount);
     for(const rawProduct of products){
       const product=asRecord(rawProduct),fees=asRecord(product.commission);
-      const sale=asRecord(fees.sale_amount),value=amount(sale.amount);
+      const sale=asRecord(fees.sale_amount),value=deliveryOnly?0:amount(sale.amount);
       if(typeof sale.currency==='string')currencies.add(sale.currency);
       if(value===null)complete=false;else revenue+=value;
-      const fee=amount(asRecord(fees.commission).amount);
-      const delivery=amount(asRecord(asRecord(product.delivery).total_accrued).amount);
+      const fee=deliveryOnly?0:amount(asRecord(fees.commission).amount);
+      const delivery=Object.keys(asRecord(product.delivery)).length===0?0:amount(asRecord(asRecord(product.delivery).total_accrued).amount);
       if(fee===null||delivery===null)detailsComplete=false;
       else {commission-=fee;logistics-=delivery;}
     }
@@ -279,6 +286,7 @@ export async function getOzonFinanceReport(
   return {
     marketplace: "ozon",
     dashboard:ozonDashboardFinance(rows),
+    dashboardVersion:6,
     dashboardDiagnostics:ozonAccrualShape(rows),
     currency,
     from,

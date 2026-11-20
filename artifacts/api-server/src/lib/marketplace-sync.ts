@@ -111,13 +111,13 @@ export async function ensureMarketplaceSyncSchema(): Promise<void> {
     FROM marketplace_connections c WHERE j.connection_id=c.id AND c.marketplace='ozon'
     AND j.kind='snapshot' AND (j.params->>'sourceVersion') IS DISTINCT FROM '3'`);
   // Rebuild derived results from retained raw pages; do not reset provider budgets.
-  await pool.query(`UPDATE marketplace_sync_jobs j SET state='queued',next_attempt_at=now(),params=params||'{"sourceVersion":4}'::jsonb
+  await pool.query(`UPDATE marketplace_sync_jobs j SET state='queued',next_attempt_at=now(),params=params||'{"sourceVersion":5}'::jsonb
     FROM marketplace_connections c WHERE j.connection_id=c.id AND
     (c.marketplace='wildberries' AND j.kind='snapshot')
-    AND (j.params->>'sourceVersion') IS DISTINCT FROM '4'`);
-  await pool.query(`UPDATE marketplace_sync_jobs j SET state='queued',next_attempt_at=now(),params=params||'{"sourceVersion":5}'::jsonb
-    FROM marketplace_connections c WHERE j.connection_id=c.id AND c.marketplace='ozon' AND j.kind='finance'
     AND (j.params->>'sourceVersion') IS DISTINCT FROM '5'`);
+  await pool.query(`UPDATE marketplace_sync_jobs j SET state='queued',next_attempt_at=now(),params=params||'{"sourceVersion":6}'::jsonb
+    FROM marketplace_connections c WHERE j.connection_id=c.id AND c.marketplace='ozon' AND j.kind='finance'
+    AND (j.params->>'sourceVersion') IS DISTINCT FROM '6'`);
 }
 
 // Callers MUST select the connection through their existing company/store ACL first.
@@ -135,6 +135,10 @@ export async function sharedDataset<T>(connection: MarketplaceConnection, kind: 
   const row = rows[0];
   const value = row.result ?? row.partial_result;
   if (!value) {
+    if(connection.marketplace==='wildberries'&&kind==='snapshot'&&row.state==='blocked'&&row.last_error==='ВБ: в воронке отсутствуют обязательные показатели.'){
+      await pool.query("UPDATE marketplace_sync_jobs SET state='queued',next_attempt_at=now() WHERE id=$1 AND state='blocked'",[id]);
+      throw new SyncDeferred(Date.now()+5000,'budget','Повторно обрабатываем сохранённый ответ ВБ.');
+    }
     if(row.last_error==='Ozon: данные не загружены из-за ограничения подписки. Требуется Premium Plus или Premium Pro.')throw new SyncRejected(403,'subscription');
     if (row.state === 'blocked') {
       if(row.last_error==='Площадка отклонила запрос (HTTP 403).')throw new SyncRejected(403);
@@ -149,7 +153,7 @@ export async function sharedDataset<T>(connection: MarketplaceConnection, kind: 
   // Validate the derived shape as well as params so those old results cannot
   // stay 'ready' until the next 12-hour finance refresh.
   const shape=result as Record<string,unknown>;
-  const outdated=connection.marketplace==='ozon'&&kind==='finance'&&!shape.dashboardDiagnostics
+  const outdated=connection.marketplace==='ozon'&&kind==='finance'&&shape.dashboardVersion!==6
     ||connection.marketplace==='wildberries'&&kind==='snapshot'&&shape.funnel&&!shape.wbDailyFunnel;
   if(outdated&&row.state==='ready'){
     await pool.query("UPDATE marketplace_sync_jobs SET state='queued',next_attempt_at=now() WHERE id=$1 AND state='ready'",[id]);
