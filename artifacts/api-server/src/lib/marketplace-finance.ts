@@ -1,4 +1,4 @@
-import { providerFetch, SyncDeferred, syncContext } from './sync-context.ts';
+import { providerFetch, SyncDeferred, SyncRejected, syncContext } from './sync-context.ts';
 export type WildberriesFinanceTotals = {
   retailAmount: number;
   sellerPayout: number;
@@ -107,7 +107,7 @@ async function financeRequest(
       signal: AbortSignal.timeout(30_000),
     });
   } catch (error) {
-    if (error instanceof SyncDeferred) throw error;
+    if (error instanceof SyncDeferred || error instanceof SyncRejected) throw error;
     throw new Error("Финансовый API Wildberries не ответил. Повторите попытку позже.");
   }
 

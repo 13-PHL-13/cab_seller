@@ -9,6 +9,13 @@ export class SyncDeferred extends Error {
     this.reason = reason;
   }
 }
+export class SyncRejected extends Error {
+  readonly status: number;
+  constructor(status: number) {
+    super(`Площадка отклонила запрос (HTTP ${status}).`);
+    this.status=status;
+  }
+}
 
 export type SyncContext = {
   fetch: (url: string, init: RequestInit) => Promise<Response>;

@@ -388,6 +388,7 @@ async function getMinPriceSource(req: import("express").Request, marketplace: "o
       storePayout = report.totals.sellerPayout;
     } else {
       const sales = await sharedSnapshot(connection, from, to);
+      if (sales.unavailable?.revenue) throw new Error('В суммах Ozon есть пропуски. Минимальные цены пока не рассчитаны.');
       storeRevenue = [...sales.daily.values()].reduce((sum, point) => sum + point.revenue, 0);
       const reports = [];
       for (const period of dateChunks(from, to, 7)) reports.push(await sharedDataset<Awaited<ReturnType<typeof getOzonFinanceReport>>>(connection, "finance", { from: period.from, to: period.to }));
