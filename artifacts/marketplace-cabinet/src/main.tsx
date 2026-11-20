@@ -1,6 +1,7 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { createRoot } from "react-dom/client";
 import App from "./App";
+import { BrandLogo } from "@/components/Logo";
 import { ErrorBoundary } from "@/components/error-boundary";
 import "./index.css";
 
@@ -37,7 +38,7 @@ function AuthScreen({ onAuthenticated }: { onAuthenticated: (user: User) => void
 
   return <div className="empty-state" style={{ minHeight: "100vh", display: "grid", placeItems: "center", padding: 24 }}>
     <form onSubmit={submit} style={{ width: "min(100%, 420px)", padding: 32, borderRadius: 16, background: "var(--card, #fff)", boxShadow: "0 12px 40px #00000012", display: "grid", gap: 16 }}>
-      <div><h1 style={{ marginBottom: 8 }}>Навигатор продаж</h1><p>Личный кабинет продавца</p></div>
+      <div><h1 style={{ marginBottom: 8 }}><BrandLogo width={300} /></h1><p>Личный кабинет продавца</p></div>
       <div style={{ display: "flex", gap: 8 }}>
         <button type="button" className={mode === "login" ? "btn btn-primary" : "btn"} onClick={() => { setMode("login"); setError(""); setMessage(""); }}>Войти</button>
         <button type="button" className={mode === "register" ? "btn btn-primary" : "btn"} onClick={() => { setMode("register"); setError(""); setMessage(""); }}>Регистрация</button>

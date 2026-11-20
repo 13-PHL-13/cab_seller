@@ -91,6 +91,8 @@ input, select, textarea { font-family: inherit; }
   font-size: 10.5px;
 }
 
+.sidebar .brand.brand-approved { flex-direction: column; align-items: flex-start; gap: 7px; }
+
 .nav-item {
   display: flex;
   align-items: center;
