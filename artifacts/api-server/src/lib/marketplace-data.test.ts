@@ -10,7 +10,10 @@ const funnel={data:{products:[{statistics:{selected:{openCount:20,cartCount:8,or
 test('WB funnel continues after the first 1000 products',async(t)=>{
   const offsets:number[]=[];
   t.mock.method(globalThis,'fetch',async(url:string,init?:RequestInit)=>{
-    if(url.includes('/supplier/sales'))return new Response('[]');
+    if(url.includes('/supplier/sales')){
+      assert.equal(new URL(url).searchParams.get('dateFrom'),new Date(Date.parse(today)-89*86400000).toISOString().slice(0,10));
+      return new Response('[]');
+    }
     const offset=JSON.parse(String(init?.body)).offset;offsets.push(offset);
     return new Response(JSON.stringify({data:{products:Array.from({length:offset===0?1000:1},()=>({statistics:{selected:{openCount:1,cartCount:0,orderCount:0,buyoutCount:0}}}))}}));
   });
