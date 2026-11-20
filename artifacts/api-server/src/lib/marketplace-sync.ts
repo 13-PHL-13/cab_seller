@@ -135,6 +135,10 @@ export async function sharedDataset<T>(connection: MarketplaceConnection, kind: 
   const row = rows[0];
   const value = row.result ?? row.partial_result;
   if (!value) {
+    if(connection.marketplace==='wildberries'&&kind==='snapshot'&&row.state==='blocked'&&row.last_error==='ВБ: в воронке отсутствуют обязательные показатели.'){
+      await pool.query("UPDATE marketplace_sync_jobs SET state='queued',next_attempt_at=now() WHERE id=$1 AND state='blocked'",[id]);
+      throw new SyncDeferred(Date.now()+5000,'budget','Повторно обрабатываем сохранённый ответ ВБ.');
+    }
     if(row.last_error==='Ozon: данные не загружены из-за ограничения подписки. Требуется Premium Plus или Premium Pro.')throw new SyncRejected(403,'subscription');
     if (row.state === 'blocked') {
       if(row.last_error==='Площадка отклонила запрос (HTTP 403).')throw new SyncRejected(403);
