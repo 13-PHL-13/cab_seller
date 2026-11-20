@@ -122,6 +122,7 @@ test('PostgreSQL queue survives restart, shares pages, honours 429 and credentia
     assert.equal((await pool.query("SELECT 1 FROM marketplace_sync_pages WHERE payload LIKE '%private-company%' UNION ALL SELECT 1 FROM marketplace_sync_jobs WHERE result LIKE '%private-company%'")).rowCount,0);
     // A previous deployment worker cannot leave an old finance result marked
     // ready after the new schema migration (zero-downtime deployment overlap).
+    await pool.query('TRUNCATE marketplace_sync_jobs,marketplace_sync_pages,marketplace_sync_budgets');
     await sharedDataset(ozon,'finance',{from:'rollout',to:'rollout'}).catch(()=>{});
     await workOne(planHandlers);
     const oldFinance=await sharedDataset(ozon,'finance',{from:'rollout',to:'rollout'});
