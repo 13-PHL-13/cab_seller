@@ -1,6 +1,23 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { completeSum,change,calendarDays,metricCoverage,metricSum,sameMetricCohort,chartCoverage } from '../src/lib/dashboard-model.ts';
+import { completeSum,change,calendarDays,metricCoverage,metricSum,sameMetricCohort,chartCoverage,dailyMetricSum,sameDailyMetricCohort } from '../src/lib/dashboard-model.ts';
+
+test('platform charts retain available daily values and real zeroes without filling gaps or relaxing aggregate coverage',()=>{
+ const stores=[{id:1,storeName:'A',marketplace:'wildberries'},{id:2,storeName:'B',marketplace:'wildberries'}];
+ const day='2026-11-20';
+ const window={from:day,to:day,stores:stores.map((store,index)=>({...store,data:{totals:{orders:index===0?5:null},daily:[{date:day,orders:index===0?5:null,bought:null}]}}))};
+ window.stores[1].data.daily.push({date:'2026-11-19',orders:3,bought:null});
+ assert.equal(dailyMetricSum(stores,window,day,'orders',true),5);
+ assert.equal(dailyMetricSum(stores,window,day,'orders'),null);
+ assert.equal(dailyMetricSum(stores,window,day,'bought',true),null);
+ assert.equal(dailyMetricSum(stores,window,'2026-11-18','orders',true),null);
+ window.stores[0].data.daily[0].orders=0;
+ assert.equal(dailyMetricSum(stores,window,day,'orders',true),0);
+ assert.deepEqual(chartCoverage(stores,window,['orders','bought']).included,[]);
+ assert.equal(sameDailyMetricCohort(stores,window,window,day,day,'orders'),true);
+ const previous=structuredClone(window);previous.stores[1].data.daily[0].orders=3;
+ assert.equal(sameDailyMetricCohort(stores,window,previous,day,day,'orders'),false);
+});
 
 test('a combined chart uses one complete store cohort for every stage and every day',()=>{
  const store=id=>({id,storeName:String(id),marketplace:id===1?'ozon':'wildberries'});

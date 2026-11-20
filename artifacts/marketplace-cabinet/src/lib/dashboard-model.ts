@@ -39,6 +39,17 @@ export function completeSum(
     : null;
 }
 type StoreIdentity = {id:number;storeName:string;marketplace:string};
+export function dailyMetricSum(stores:StoreIdentity[],window:DashboardWindow|undefined,date:string,key:DashboardMetric,partial=false){
+  const values=metricCoverage(stores,window,key,true).included.map(store=>window?.stores.find(item=>item.id===store.id)?.data.daily.find(point=>point.date===date)?.[key]);
+  return completeSum(partial?values.filter(value=>typeof value==='number'&&Number.isFinite(value)):values);
+}
+export function sameDailyMetricCohort(stores:StoreIdentity[],current:DashboardWindow|undefined,previous:DashboardWindow|undefined,date:string,previousDate:string,key:DashboardMetric){
+  const ids=(window:DashboardWindow|undefined,day:string)=>stores.filter(store=>{
+    const value=window?.stores.find(item=>item.id===store.id)?.data.daily.find(point=>point.date===day)?.[key];
+    return typeof value==='number'&&Number.isFinite(value);
+  }).map(store=>store.id).sort((a,b)=>a-b).join(',');
+  const currentIds=ids(current,date);return currentIds!==''&&currentIds===ids(previous,previousDate);
+}
 /** One coherent set of stores supplies every line of a combined chart. */
 export function chartCoverage<T extends StoreIdentity>(stores:T[],window:DashboardWindow|undefined,metrics:DashboardMetric[]) {
   const dates=window?calendarDays(window.from,window.to):[];

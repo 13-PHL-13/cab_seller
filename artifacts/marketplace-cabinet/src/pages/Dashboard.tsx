@@ -21,6 +21,8 @@ import {
   completeSum,
   metricCoverage,
   chartCoverage,
+  dailyMetricSum,
+  sameDailyMetricCohort,
   metricSum,
   sameMetricCohort,
   calendarDays,
@@ -125,7 +127,7 @@ function Toggle({
   );
 }
 function CoverageNotice({stores,window,metrics,previous,coherent=false}:{stores:MarketplaceStore[];window:DashboardWindow;metrics:DashboardMetric[];previous?:DashboardWindow;coherent?:boolean}) {
-  const missing=coherent?chartCoverage(stores,window,metrics).excluded:stores.filter(store=>metrics.some(key=>metricCoverage(stores,window,key,true).excluded.some(s=>s.id===store.id)||metricCoverage(stores,window,key).excluded.some(s=>s.id===store.id)));
+  const missing=chartCoverage(stores,window,metrics).excluded;
   const changed=previous && metrics.some(key=>metricCoverage(stores,window,key,true).included.map(s=>s.id).sort().join(',')!==metricCoverage(stores,previous,key,true).included.map(s=>s.id).sort().join(','));
   if(!missing.length && !changed)return null;
   const names=missing.map(s=>`${platformName(s.marketplace)} · ${s.storeName}`).join(', ');
@@ -135,7 +137,7 @@ function CoverageNotice({stores,window,metrics,previous,coherent=false}:{stores:
     const premium=reasons.find(reason=>/Требуется Premium/.test(reason!));
     return `${platformName(store.marketplace)} · ${store.storeName} — ${premium?premium.replace('Требуется','требуется'):'не все данные загружены'}`;
   }).join('; ')}. {chartCoverage(stores,window,metrics).included.length?'График без этих магазинов.':'Нет магазинов с полным набором показателей.'}</p>;
-  return <p className="dashboard-coverage" role="note" title={changed ? 'Сравнение скрыто: за периоды доступен разный состав магазинов.' : undefined}>{missing.length ? metrics.length>1 ? `Часть показателей недоступна: ${names}. Итог по доступным данным.` : `Итог без данных: ${names}.` : 'Сравнение периодов недоступно.'} {reasons}</p>;
+  return <p className="dashboard-coverage" role="note" title={changed ? 'Сравнение скрыто: за периоды доступен разный состав магазинов.' : undefined}>{missing.length ? `Показаны доступные данные. Часть данных не загружена: ${names}.` : 'Сравнение периодов недоступно.'} {reasons}</p>;
 }
 function sumMetric(
   stores: MarketplaceStore[],
@@ -148,6 +150,7 @@ function dayPoints(
   stores: MarketplaceStore[],
   window: DashboardWindow | undefined,
   dates: string[],
+  partial = false,
 ): DashboardPoint[] {
   return dates.map(
     (date) =>
@@ -155,14 +158,7 @@ function dayPoints(
         ["date", date],
         ...keys.map((key) => [
           key,
-          completeSum(
-            metricCoverage(stores,window,key,true).included.map(
-              (store) =>
-                window?.stores
-                  .find((s) => s.id === store.id)
-                  ?.data.daily.find((p) => p.date === date)?.[key],
-            ),
-          ),
+          dailyMetricSum(stores,window,date,key,partial),
         ]),
       ]) as DashboardPoint,
   );
@@ -190,12 +186,14 @@ function Summary({
   previous,
   current,
   kind,
+  partial=false,
 }: {
   stores: MarketplaceStore[];
   window: DashboardWindow;
   previous?: DashboardWindow;
   current?: DashboardWindow;
   kind: "orders" | "bought";
+  partial?:boolean;
 }) {
   const today = current?.to;
   const daily = dayPoints(
@@ -209,6 +207,7 @@ function Summary({
             .slice(0, 10),
         ]
       : [],
+    partial,
   );
   return (
     <div className="commerce-summary">
@@ -242,7 +241,7 @@ function Summary({
                   <strong>{formatter(daily[0]?.[metric] ?? null)}</strong>{" "}
                   <Change
                     value={daily[0]?.[metric] ?? null}
-                    previous={daily[1]?.[metric] ?? null}
+                    previous={!partial||today&&sameDailyMetricCohort(stores,current,current,today,new Date(Date.parse(today+'T00:00:00Z')-86400000).toISOString().slice(0,10),metric)?daily[1]?.[metric]??null:null}
                   />
                 </span>
               </div>
@@ -787,11 +786,11 @@ export default function DashboardPage() {
     const currentOwn=aggregate?chartCoverage(own,chosen,groupMetrics).included:own;
     const previousOwn=aggregate?chartCoverage(own,previous,groupMetrics).included:own;
     const sameGroup=!aggregate||currentOwn.length>0&&currentOwn.map(s=>s.id).sort().join(',')===previousOwn.map(s=>s.id).sort().join(',');
-    const currentPoints = dayPoints(currentOwn, chosen, dates),
+    const currentPoints = dayPoints(currentOwn, chosen, dates,!aggregate),
       previousDates = previous
         ? calendarDays(previous.from, previous.to)
         : dates,
-      previousPoints = dayPoints(previousOwn, previous, previousDates),
+      previousPoints = dayPoints(previousOwn, previous, previousDates,!aggregate),
       unit = units[id] ?? "count",
       label =
         kind === "funnel"
@@ -810,6 +809,7 @@ export default function DashboardPage() {
               : kind,
           ];
     const colors = ["#d63dd0", "#8651d0", "#16a59c", "#4184d4"];
+    const comparable=(key:DashboardMetric,index:number)=>sameGroup&&sameMetricCohort(currentOwn,chosen,previous,key,true)&&(aggregate||sameDailyMetricCohort(own,chosen,previous,dates[index],previousDates[index],key));
     const series: ChartSeries[] = metrics.flatMap((key, i) => [
       {
         key,
@@ -835,7 +835,7 @@ export default function DashboardPage() {
         label: "Предыдущий период",
         color: "#9baaa6",
         previous: true,
-        values: previousPoints.map((p) => sameGroup&&sameMetricCohort(currentOwn,chosen,previous,key,true) ? p[key] : null),
+        values: previousPoints.map((p,index) => comparable(key,index) ? p[key] : null),
       },
     ]);
     return (
@@ -850,7 +850,7 @@ export default function DashboardPage() {
             : series
         }
         current={currentPoints}
-        previous={previousPoints.map(p=>Object.fromEntries(Object.entries(p).map(([key,value])=>[key,key==='date'||sameGroup&&sameMetricCohort(currentOwn,chosen,previous,key as DashboardMetric,true)?value:null])) as DashboardPoint)}
+        previous={previousPoints.map((p,index)=>Object.fromEntries(Object.entries(p).map(([key,value])=>[key,key==='date'||comparable(key as DashboardMetric,index)?value:null])) as DashboardPoint)}
         unit={kind === "funnel" ? "count" : unit}
         bar={aggregate && kind !== "funnel"}
       />
@@ -863,7 +863,7 @@ export default function DashboardPage() {
       yesterday = new Date(Date.parse(currentDay + "T00:00:00Z") - 86400000)
         .toISOString()
         .slice(0, 10),
-      points = dayPoints(own, windows.current, [currentDay, yesterday]);
+      points = dayPoints(own, windows.current, [currentDay, yesterday],!coherent);
     return (
       <div className="platform-funnel-legend">
         {(
@@ -894,12 +894,10 @@ export default function DashboardPage() {
                 <span>
                   <strong>
                     {quantity(
-                      dayPoints(own, windows.current, [
-                        windows.current?.to ?? today,
-                      ])[0][key],
+                      points[0][key],
                     )}
                   </strong>
-                  <Change value={points[0][key]} previous={points[1][key]} />
+                  <Change value={points[0][key]} previous={sameDailyMetricCohort(own,windows.current,windows.current,currentDay,yesterday,key)?points[1][key]:null} />
                 </span>
               </div>
             </div>
@@ -1106,6 +1104,7 @@ export default function DashboardPage() {
                       <div className="platform-commerce">
                         <Summary
                           stores={own}
+                          partial
                           window={chosen}
                           previous={previous}
                           current={windows.current}
