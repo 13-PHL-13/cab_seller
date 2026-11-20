@@ -90,3 +90,4 @@
 .prototype-dashboard .global-toggle-anchor.is-fixed{z-index:25}
 .prototype-dashboard .chart-card,.prototype-dashboard .store-panel,.prototype-dashboard .finance-card{scroll-margin-top:90px}
 @media(max-width:620px){.prototype-dashboard .platform-heading,.prototype-dashboard .chart-heading{flex-wrap:wrap}.prototype-dashboard .orders-metrics{flex-basis:100%}.prototype-dashboard .task-heading-actions{max-width:100%}.prototype-dashboard .finance-row{flex-wrap:wrap}.prototype-dashboard .store-panels{grid-template-columns:1fr}}
+.prototype-dashboard .dashboard-coverage { color: #806020; background: #fff8e8; border: 1px solid #eadbb7; border-radius: 6px; padding: 6px 9px; margin: 8px 0; font-size: 12px; line-height: 1.45; overflow-wrap: anywhere; }

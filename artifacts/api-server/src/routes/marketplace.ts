@@ -91,7 +91,7 @@ async function getCachedSnapshot(
     .then((snapshot) => {
       dashboardCache.set(key, {
         snapshot,
-        expiresAt: Date.now() + DASHBOARD_CACHE_TTL,
+        expiresAt: Date.now() + (snapshot.unavailable && Object.keys(snapshot.unavailable).length ? 60_000 : DASHBOARD_CACHE_TTL),
       });
       return snapshot;
     })
@@ -735,7 +735,7 @@ router.get("/marketplace/dashboard", async (req, res): Promise<void> => {
             marketplaceCooldowns.get(cooldownKey) ?? 0,
             connection.analyticsRetryAt?.getTime() ?? 0,
           );
-          if (cooldownUntil > Date.now()) {
+          if (req.query.layout !== 'prototype' && cooldownUntil > Date.now()) {
             const remainingSeconds = Math.ceil((cooldownUntil - Date.now()) / 1000);
             const wait = remainingSeconds >= 3600 ? `${Math.ceil(remainingSeconds / 3600)} ч.` : remainingSeconds >= 60 ? `${Math.ceil(remainingSeconds / 60)} мин.` : `${remainingSeconds} сек.`;
             partialErrors.push(`${connection.storeName}: API временно ограничил запросы. Повторите через ${wait}.`);
@@ -748,8 +748,9 @@ router.get("/marketplace/dashboard", async (req, res): Promise<void> => {
             ? [to, new Date().toISOString().slice(0, 10)].sort()[0] : to;
           const snapshot = await getCachedSnapshot(cacheKey, () => target === "ozon"
             ? getOzonSnapshot(credentials as { clientId: string; apiKey: string }, from, requestTo)
-            : getWildberriesSnapshot(credentials as { apiKey: string }, from, to));
+            : getWildberriesSnapshot(credentials as { apiKey: string }, from, to, req.query.layout === 'prototype'));
           const detail = dashboardStoreData(snapshot,target);
+          for(const warning of Object.values(snapshot.unavailable??{}))partialErrors.push(`${connection.storeName}: ${warning}`);
           if (requestTo !== to) {
             for (const key of Object.keys(detail.totals) as Array<keyof typeof detail.totals>) detail.totals[key] = null;
           }

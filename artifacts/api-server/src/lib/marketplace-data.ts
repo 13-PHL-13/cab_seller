@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 type OzonCredentials = { clientId: string; apiKey: string };
 type WildberriesCredentials = { apiKey: string };
 
@@ -13,12 +14,15 @@ type DailyPoint = {
 export type MarketplaceSnapshot = {
   daily: Map<string, DailyPoint>;
   funnel: Omit<DailyPoint, "date" | "revenue">;
+  unavailable?: { sales?: string; funnel?: string };
 };
 
 export class MarketplaceRateLimitError extends Error {
-  constructor(public readonly retryAfterSeconds: number) {
+  readonly retryAfterSeconds: number;
+  constructor(retryAfterSeconds: number) {
     super(`Превышен лимит запросов площадки. Повторите через ${retryAfterSeconds} сек.`);
     this.name = "MarketplaceRateLimitError";
+    this.retryAfterSeconds = retryAfterSeconds;
   }
 }
 
@@ -56,10 +60,15 @@ function dateRange(period: "7d" | "30d" | "90d"): {
   };
 }
 
+const wbEndpointCooldowns=new Map<string,number>();
 async function requestJson(
   url: string,
   init: RequestInit,
 ): Promise<Record<string, unknown>> {
+  const endpoint=new URL(url);
+  const wbKey=endpoint.hostname.endsWith('.wildberries.ru') ? createHash('sha256').update(new Headers(init.headers).get('Authorization')??'').update(endpoint.origin+endpoint.pathname).digest('hex') : null;
+  const retryAt=wbKey ? wbEndpointCooldowns.get(wbKey)??0 : 0;
+  if(retryAt>Date.now())throw new MarketplaceRateLimitError(Math.ceil((retryAt-Date.now())/1000));
   let response: Response;
   try {
     response = await fetch(url, {
@@ -75,6 +84,7 @@ async function requestJson(
       response.headers.get("Retry-After");
     if (response.status === 429) {
       const retrySeconds = Math.max(1, Math.ceil(Number(retryAfter) || 60));
+      if(wbKey)wbEndpointCooldowns.set(wbKey,Date.now()+retrySeconds*1000);
       throw new MarketplaceRateLimitError(retrySeconds);
     }
     const responseBody = (await response.text())
@@ -208,13 +218,34 @@ async function requestWildberriesFunnel(
     },
   );
 
-  return { data: { cards: wildberriesCards(response) } };
+  const cards=wildberriesCards(response);
+  if(cards.length>=1000)throw new Error('Воронка ВБ получена не полностью: требуется продолжение списка товаров.');
+  return { data: { cards } };
 }
 
 async function requestWildberriesSales(
   credentials: WildberriesCredentials,
   from: string,
 ): Promise<unknown[]> {
+  // Both dashboard windows consume the same raw feed. Share that request;
+  // supplier/sales has a much stricter quota than the analytics endpoint.
+  const rollingStart = new Date(Date.now()-28*86400000).toISOString().slice(0,10);
+  const sourceFrom = from < rollingStart ? from : rollingStart;
+  const key=createHash('sha256').update(credentials.apiKey).update(sourceFrom).digest('hex');
+  const cached=wbSalesCache.get(key);
+  if(cached && cached.expiresAt>Date.now())return cached.rows;
+  const pending=wbSalesRequests.get(key);
+  if(pending)return pending;
+  const request=loadWildberriesSales(credentials,sourceFrom).then(rows=>{
+    wbSalesCache.set(key,{rows,expiresAt:Date.now()+65_000});
+    return rows;
+  }).finally(()=>wbSalesRequests.delete(key));
+  wbSalesRequests.set(key,request);
+  return request;
+}
+const wbSalesCache=new Map<string,{rows:unknown[];expiresAt:number}>();
+const wbSalesRequests=new Map<string,Promise<unknown[]>>();
+async function loadWildberriesSales(credentials: WildberriesCredentials,from:string):Promise<unknown[]> {
   const response = await requestJson(
     `https://statistics-api.wildberries.ru/api/v1/supplier/sales?dateFrom=${encodeURIComponent(from)}&flag=0`,
     {
@@ -222,9 +253,11 @@ async function requestWildberriesSales(
       headers: { Authorization: credentials.apiKey },
     },
   );
-  return Array.isArray(response["data"])
+  const rows=Array.isArray(response["data"])
     ? asArray(response["data"])
     : asArray(response);
+  if(rows.length>=80_000)throw new Error('Отчёт продаж ВБ получен не полностью. Требуется продолжение выгрузки.');
+  return rows;
 }
 
 function wildberriesCards(response: Record<string, unknown>): unknown[] {
@@ -276,18 +309,35 @@ export async function getWildberriesSnapshot(
   credentials: WildberriesCredentials,
   from: string,
   to: string,
+  allowPartial = false,
 ): Promise<MarketplaceSnapshot> {
-  const [funnelResponse, sales] = await Promise.all([
+  const [funnelResult, salesResult] = await Promise.allSettled([
     requestWildberriesFunnel(credentials, from, to),
     requestWildberriesSales(credentials, from),
   ]);
+  if(!allowPartial && (funnelResult.status==='rejected' || salesResult.status==='rejected'))throw funnelResult.status==='rejected' ? funnelResult.reason : salesResult.status==='rejected' ? salesResult.reason : new Error('Нет данных ВБ.');
+  if(funnelResult.status==='rejected' && salesResult.status==='rejected')throw funnelResult.reason;
   const snapshot = emptySnapshot();
-  snapshot.funnel = readWildberriesFunnel(funnelResponse);
+  snapshot.unavailable={};
+  if(funnelResult.status==='fulfilled')snapshot.funnel=readWildberriesFunnel(funnelResult.value);
+  else snapshot.unavailable.funnel=funnelResult.reason instanceof Error ? funnelResult.reason.message : 'Нет данных воронки ВБ.';
+  if(salesResult.status==='rejected'){
+    snapshot.unavailable.sales=salesResult.reason instanceof Error ? salesResult.reason.message : 'Нет данных продаж ВБ.';
+    return snapshot;
+  }
+  const sales=salesResult.value;
+  // A successful complete feed establishes real zero-sale days, unlike a failed feed.
+  for(let t=Date.parse(from+'T00:00:00Z');t<=Date.parse(to+'T00:00:00Z');t+=86400000){
+    const date=new Date(t).toISOString().slice(0,10);
+    snapshot.daily.set(date,{date,revenue:0,orders:0,units:0,views:0,cartAdds:0});
+  }
 
   for (const rawSale of sales) {
     const sale = asRecord(rawSale);
     const date = dateKey(sale["date"]);
     if (!date || date < from || date > to || sale["isCancel"] === true) continue;
+    // This endpoint returns one item per row; R-prefixed rows are returns.
+    if(typeof sale['saleID']!=='string' || !sale['saleID'].startsWith('S'))continue;
     const point = snapshot.daily.get(date) ?? {
       date,
       revenue: 0,
@@ -299,7 +349,7 @@ export async function getWildberriesSnapshot(
     const price = asNumber(
       sale["finishedPrice"] ?? sale["priceWithDisc"] ?? sale["retailPrice"],
     );
-    const quantity = asNumber(sale["quantity"]);
+    const quantity = 1;
     if (quantity <= 0 || price < 0) continue;
     point.revenue += price * quantity;
     point.orders += 1;
