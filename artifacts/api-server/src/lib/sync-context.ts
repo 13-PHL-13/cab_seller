@@ -79,3 +79,14 @@ export function packSyncResult(value: unknown): string {
 export function unpackSyncResult<T>(value: string): T {
   return JSON.parse(value, (_key, item) => item && Array.isArray(item.__syncMap) ? new Map(item.__syncMap) : item) as T;
 }
+
+export type DatasetStatus = { state: string; updatedAt: string | null; nextAttemptAt: string; stale: boolean };
+export function mergeSyncStatuses(statuses: DatasetStatus[]): DatasetStatus {
+  const stale = statuses.some(status=>status.stale);
+  return {
+    state: statuses.some(status=>status.state==='blocked') ? 'blocked' : stale ? 'waiting' : 'ready',
+    stale,
+    updatedAt: statuses.some(status=>!status.updatedAt) ? null : statuses.map(status=>status.updatedAt!).sort()[0] ?? null,
+    nextAttemptAt: statuses.map(status=>status.nextAttemptAt).sort().at(-1) ?? new Date().toISOString(),
+  };
+}

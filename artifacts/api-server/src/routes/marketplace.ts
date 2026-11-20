@@ -1,5 +1,5 @@
-import { SyncDeferred } from '../lib/sync-context';
-import { sharedDataset, sharedSnapshot } from '../lib/marketplace-sync';
+import { SyncDeferred, mergeSyncStatuses } from '../lib/sync-context';
+import { sharedDataset, sharedSnapshot, datasetStatuses } from '../lib/marketplace-sync';
 import { getOzonFinanceReport } from "../lib/marketplace-finance-ozon";
 import { getWildberriesFinanceReport } from "../lib/marketplace-finance";
 import {
@@ -15,7 +15,6 @@ import {
 import { db, aiConversationsTable, aiMessagesTable, cogsProductsTable, marketplaceConnectionsTable, sellerExpensesTable } from "@workspace/db";
 import { routerBalance } from '../lib/ai-balance';
 import { dashboardWindow, dashboardStoreData } from '../lib/dashboard-layout';
-import { createHash } from 'node:crypto';
 import { cogsProductMarketplacesTable } from "@workspace/db/schema";
 import { and, asc, desc, eq, gte, inArray, lte, sql } from "drizzle-orm";
 import { Router, type IRouter } from "express";
@@ -26,9 +25,6 @@ import {
   encryptCredentials,
 } from "../lib/marketplace-credentials";
 import {
-  getOzonSnapshot,
-  getWildberriesSnapshot,
-  MarketplaceRateLimitError,
   periodDates,
   verifyOzonCredentials,
   verifyWildberriesCredentials,
@@ -397,6 +393,14 @@ async function findConnections(ownerId: string, marketplace: Marketplace, storeI
     .orderBy(asc(marketplaceConnectionsTable.id));
 }
 
+router.get('/marketplace/sync-status', requireCompanySection('dashboard'), async (req,res):Promise<void>=>{
+  const visible = (await Promise.all((['ozon','wildberries'] as const).map(marketplace =>
+    findConnections(companyIdFromRequest(req), marketplace, storeIdFromRequest(req), allowedStoreIds(req))
+  ))).flatMap(connections=>connections??[]);
+  res.setHeader('Cache-Control','private, no-store');
+  res.json({datasets:await datasetStatuses(visible.map(connection=>connection.id))});
+});
+
 async function saveConnection(
   ownerId: string,
   companyId: string,
@@ -680,7 +684,8 @@ router.get("/marketplace/dashboard", async (req, res): Promise<void> => {
           const snapshot = await sharedSnapshot(connection, from, requestTo);
           if (snapshot.sync.stale) {
             const asOf = snapshot.sync.updatedAt ? new Date(snapshot.sync.updatedAt).toLocaleString('ru-RU', {timeZone:'Asia/Yekaterinburg'}) : 'частичной загрузки';
-            partialErrors.push(`${target === "ozon" ? "Ozon" : "ВБ"} · ${connection.storeName}: показаны данные ${asOf}. Следующая проверка — ${new Date(snapshot.sync.nextAttemptAt).toLocaleString('ru-RU', {timeZone:'Asia/Yekaterinburg'})}.`);
+            const update = snapshot.sync.state==='blocked' ? 'Обновление остановлено: нужна проверка ответа площадки и прав ключа.' : `Следующая проверка — ${new Date(snapshot.sync.nextAttemptAt).toLocaleString('ru-RU', {timeZone:'Asia/Yekaterinburg'})}.`;
+            partialErrors.push(`${target === "ozon" ? "Ozon" : "ВБ"} · ${connection.storeName}: показаны данные ${asOf}. ${update}`);
           }
           const detail = dashboardStoreData(snapshot,target);
           for(const warning of Object.values(snapshot.unavailable??{}))partialErrors.push(`${target === "ozon" ? "Ozon" : "ВБ"} · ${connection.storeName}: ${warning}`);
@@ -807,14 +812,10 @@ router.get("/marketplace/finance/wildberries", async (req, res): Promise<void> =
   }
 
   try {
-    const reports: Array<Awaited<ReturnType<typeof getWildberriesFinanceReport>>> = [];
-    for (const connection of connections) {
-      const credentials = decryptCredentials<{ apiKey: string }>(connection.credentialsCiphertext);
-      reports.push(await sharedDataset<Awaited<ReturnType<typeof getWildberriesFinanceReport>>>(connection, "finance", { from, to }));
-    }
+    const reports = await Promise.all(connections.map(connection => sharedDataset<Awaited<ReturnType<typeof getWildberriesFinanceReport>>>(connection, "finance", { from, to })));
     const totalKeys = Object.keys(reports[0]!.totals) as Array<keyof typeof reports[number]["totals"]>;
     const report = {
-      ...reports[0]!, rowsCount: reports.reduce((sum, item) => sum + item.rowsCount, 0),
+      ...reports[0]!, sync: mergeSyncStatuses(reports.map(item=>item.sync)), rowsCount: reports.reduce((sum, item) => sum + item.rowsCount, 0),
       incomplete: reports.some((item) => item.incomplete), soldItems: reports.flatMap((item) => item.soldItems),
       totals: Object.fromEntries(totalKeys.map((key) => [key, reports.reduce((sum, item) => sum + item.totals[key], 0)])) as typeof reports[number]["totals"],
     };
@@ -900,14 +901,10 @@ router.get("/marketplace/finance/ozon", async (req, res): Promise<void> => {
   }
 
   try {
-    const reports: Array<Awaited<ReturnType<typeof getOzonFinanceReport>>> = [];
-    for (const connection of connections) {
-      const credentials = decryptCredentials<{ clientId: string; apiKey: string }>(connection.credentialsCiphertext);
-      reports.push(await sharedDataset<Awaited<ReturnType<typeof getOzonFinanceReport>>>(connection, "finance", { from, to }));
-    }
+    const reports = await Promise.all(connections.map(connection => sharedDataset<Awaited<ReturnType<typeof getOzonFinanceReport>>>(connection, "finance", { from, to })));
     const totalKeys = Object.keys(reports[0]!.totals) as Array<keyof typeof reports[number]["totals"]>;
     const report: typeof reports[number] & { catalogCost: { matchedUnits: number; unmatchedUnits: number; costOfGoods: number } } = {
-      ...reports[0]!, soldItems: reports.flatMap((item) => item.soldItems), productSalesError: reports.find((item) => item.productSalesError)?.productSalesError ?? null, productSalesMetric: reports.some((item) => item.productSalesMetric === "ordered_units") ? "ordered_units" : null, totals: Object.fromEntries(totalKeys.map((key) => [key, reports.reduce((sum, item) => sum + item.totals[key], 0)])) as typeof reports[number]["totals"],
+      ...reports[0]!, sync: mergeSyncStatuses(reports.map(item=>item.sync)), soldItems: reports.flatMap((item) => item.soldItems), productSalesError: reports.find((item) => item.productSalesError)?.productSalesError ?? null, productSalesMetric: reports.some((item) => item.productSalesMetric === "ordered_units") ? "ordered_units" : null, totals: Object.fromEntries(totalKeys.map((key) => [key, reports.reduce((sum, item) => sum + item.totals[key], 0)])) as typeof reports[number]["totals"],
       catalogCost: { matchedUnits: 0, unmatchedUnits: 0, costOfGoods: 0 },
     };
     const [catalogProducts, marketplaceProducts] = await Promise.all([

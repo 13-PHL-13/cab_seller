@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { syncPolicy, assertReplaySafe, retryAtFromHeaders, packSyncResult, unpackSyncResult, syncContext, providerFetch, SyncDeferred } from './sync-context.ts';
+import { syncPolicy, assertReplaySafe, retryAtFromHeaders, packSyncResult, unpackSyncResult, syncContext, providerFetch, SyncDeferred, mergeSyncStatuses } from './sync-context.ts';
 
 test('ordinary WB Basic budgets remain independent and conservative', () => {
   assert.equal(syncPolicy('https://seller-analytics-api.wildberries.ru/api/analytics/v3/sales-funnel/products').interval, 1800000);
@@ -32,4 +32,12 @@ test('worker context does not leak between concurrently served stores', async ()
   assert.deepEqual(await Promise.all([run('A'), run('B')]), ['A', 'B']);
   assert.equal(syncContext.getStore(), undefined);
   assert.ok(new SyncDeferred(Date.now() + 60000).message.includes('в фоне'));
+});
+test('a combined finance report discloses its oldest and waiting store',()=>{
+  const combined=mergeSyncStatuses([
+    {state:'ready',stale:false,updatedAt:'2026-11-20T10:00:00Z',nextAttemptAt:'2026-11-20T12:00:00Z'},
+    {state:'waiting',stale:true,updatedAt:'2026-11-19T10:00:00Z',nextAttemptAt:'2026-11-20T18:00:00Z'},
+  ]);
+  assert.equal(combined.stale,true);assert.equal(combined.state,'waiting');
+  assert.equal(combined.updatedAt,'2026-11-19T10:00:00Z');assert.equal(combined.nextAttemptAt,'2026-11-20T18:00:00Z');
 });

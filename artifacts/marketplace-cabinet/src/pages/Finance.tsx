@@ -1,3 +1,4 @@
+import { useMarketplaceReport, type ReportRange } from '@/hooks/use-marketplace-report';
 import { useState, type FormEvent } from "react";
 import { AlertTriangle, Info, RefreshCw, Wallet } from "lucide-react";
 import {
@@ -45,41 +46,12 @@ const ITEMS: Array<{
 export default function FinancePage() {
   const [from, setFrom] = useState(() => localDate(-6));
   const [to, setTo] = useState(() => localDate());
-  const [report, setReport] = useState<WildberriesFinanceReport | null>(null);
-  const [ozonReport, setOzonReport] = useState<OzonFinanceReport | null>(null);
-  const [ozonError, setOzonError] = useState("");
-  const [ozonLoading, setOzonLoading] = useState(false);
-  const [error, setError] = useState("");
-  const [loading, setLoading] = useState(false);
-
-  async function loadReport(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    setLoading(true);
-    setError("");
-    setReport(null);
-    try {
-      const result = await getWildberriesFinanceReport(from, to);
-      setReport(result);
-    } catch (reason) {
-      setError(formatApiError(reason));
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  async function loadOzonReport(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    setOzonLoading(true);
-    setOzonError("");
-    setOzonReport(null);
-    try {
-      setOzonReport(await getOzonFinanceReport(from, to));
-    } catch (reason) {
-      setOzonError(formatApiError(reason));
-    } finally {
-      setOzonLoading(false);
-    }
-  }
+  const [wbRange,setWBRange]=useState<ReportRange|null>(null);
+  const [ozonRange,setOzonRange]=useState<ReportRange|null>(null);
+  const {report,error,loading}=useMarketplaceReport(getWildberriesFinanceReport,wbRange);
+  const {report:ozonReport,error:ozonError,loading:ozonLoading}=useMarketplaceReport(getOzonFinanceReport,ozonRange);
+  function loadReport(event:FormEvent<HTMLFormElement>){event.preventDefault();setWBRange({from,to,requestId:Date.now()});}
+  function loadOzonReport(event:FormEvent<HTMLFormElement>){event.preventDefault();setOzonRange({from,to,requestId:Date.now()});}
 
   return (
     <>

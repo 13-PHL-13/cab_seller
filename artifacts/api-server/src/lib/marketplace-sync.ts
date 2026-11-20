@@ -14,6 +14,16 @@ export type SyncStatus = { state: string; updatedAt: string | null; nextAttemptA
 const revisionOf = (ciphertext: string) => createHash('sha256').update(ciphertext).digest('hex');
 const hash = (value: string) => createHash('sha256').update(value).digest('hex');
 
+export async function datasetStatuses(connectionIds: number[]) {
+  if (!connectionIds.length) return [];
+  const {rows}=await pool.query(`SELECT connection_id AS "storeId",kind,params,state,
+    updated_at AS "sourceUpdatedAt",next_attempt_at AS "nextAttemptAt",last_error AS error,
+    result IS NOT NULL AS "hasCompleteResult",partial_result IS NOT NULL AS "hasPartialResult"
+    FROM marketplace_sync_jobs WHERE connection_id=ANY($1::integer[]) AND accessed_at>now()-interval '1 day'
+    ORDER BY connection_id,kind,next_attempt_at`,[connectionIds]);
+  return rows;
+}
+
 export async function sharedSnapshot(connection: MarketplaceConnection, from: string, to: string) {
   const today = new Date().toISOString().slice(0, 10);
   const rollingFrom = new Date(Date.parse(today) - 89 * 86400000).toISOString().slice(0,10);
@@ -68,7 +78,7 @@ export async function sharedDataset<T>(connection: MarketplaceConnection, kind: 
   const row = rows[0];
   const value = row.result ?? row.partial_result;
   if (!value) {
-    if (row.state === 'blocked') throw new Error('Площадка отклонила загрузку. Проверьте права и срок действия ключа в «Подключениях API».');
+    if (row.state === 'blocked') throw new Error('Не удалось завершить выгрузку: нужна проверка ответа площадки и прав ключа в «Подключениях API».');
     throw new SyncDeferred(Math.max(Date.now() + 5000, new Date(row.next_attempt_at).getTime()));
   }
   const result = unpackSyncResult<T>(value);
@@ -189,6 +199,7 @@ export async function workOne(handlers: Handlers): Promise<boolean> {
     const deferred = error instanceof SyncDeferred || context.deferredUntil.length > 0;
     const failures = error instanceof SyncDeferred && error.reason === 'budget' ? job.failures : job.failures + 1;
     const retryAt = error instanceof SyncDeferred ? error.retryAt : context.deferredUntil.length ? Math.min(...context.deferredUntil) : Date.now() + 3600_000;
+    console.warn('Marketplace dataset deferred or blocked', { connectionId: job.connection_id, kind: job.kind, deferred, failures });
     await pool.query(`UPDATE marketplace_sync_jobs SET state=$3,next_attempt_at=$4,lease_until=NULL,lease_token=NULL,failures=$5,last_error=$6 WHERE id=$1 AND lease_token=$2`,
       [job.id, token, deferred ? 'waiting' : 'blocked', new Date(Math.max(retryAt, failures > 8 ? Date.now() + 24 * 3600_000 : 0)), failures,
         deferred ? 'Ожидание доступного интервала площадки.' : 'Площадка отклонила загрузку или вернула неподдерживаемые данные.']);
@@ -206,12 +217,12 @@ export function startMarketplaceSync(handlers: Handlers): () => void {
     try {
       if (Date.now() - lastSeed > 60_000) { await seedCommonDatasets(); lastSeed = Date.now(); }
       // Keep recently used datasets warm without relying on page navigation.
-      // Inactive historic ranges stop refreshing after seven days.
+      // Historic ranges stop refreshing ten minutes after their last consumer.
       await pool.query(`UPDATE marketplace_sync_jobs SET state='queued',generation=now()
         WHERE state='ready' AND next_attempt_at<=now() AND accessed_at>now()-interval '10 minutes'`);
       for (let i = 0; i < 8 && !stopped; i++) if (!await workOne(handlers)) break;
     }
-    catch { /* Durable leases recover on the next tick; never log provider secrets. */ }
+    catch { console.warn('Marketplace queue unavailable; durable leases will recover on the next tick.'); }
     finally { running = false; }
   };
   const timer = setInterval(() => { void tick(); }, 2000);
