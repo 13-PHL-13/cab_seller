@@ -128,7 +128,7 @@ test('PostgreSQL queue survives restart, shares pages, honours 429 and credentia
     await workOne(planHandlers);
     const oldFinance=await sharedDataset(ozon,'finance',{from:'rollout',to:'rollout'});
     assert.equal(oldFinance.sync.state,'queued');
-    await workOne({...planHandlers,finance:async()=>({value:2,dashboardVersion:8,dashboardDiagnostics:{postingRows:0}})});
+    await workOne({...planHandlers,finance:async()=>({value:2,dashboardVersion:9,dashboardDiagnostics:{postingRows:0}})});
     assert.equal((await sharedDataset(ozon,'finance',{from:'rollout',to:'rollout'})).sync.state,'ready');
     // WB daily history resumes one permitted request at a time, retaining
     // its period totals and successful sales while a later day is deferred.

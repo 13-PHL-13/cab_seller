@@ -192,9 +192,9 @@ export async function ensureMarketplaceSyncSchema(): Promise<void> {
   await pool.query(`UPDATE marketplace_sync_jobs j SET
     state=CASE WHEN j.state='ready' THEN 'queued' ELSE j.state END,
     next_attempt_at=CASE WHEN j.state='ready' THEN now() ELSE j.next_attempt_at END,
-    params=params||'{"sourceVersion":8}'::jsonb
+    params=params||'{"sourceVersion":9}'::jsonb
     FROM marketplace_connections c WHERE j.connection_id=c.id AND c.marketplace='ozon' AND j.kind='finance'
-    AND (j.params->>'sourceVersion') IS DISTINCT FROM '8'`);
+    AND (j.params->>'sourceVersion') IS DISTINCT FROM '9'`);
 }
 
 // Callers MUST select the connection through their existing company/store ACL first.
@@ -230,7 +230,7 @@ export async function sharedDataset<T>(connection: MarketplaceConnection, kind: 
   // Validate the derived shape as well as params so those old results cannot
   // stay 'ready' until the next 12-hour finance refresh.
   const shape=result as Record<string,unknown>;
-  const outdated=connection.marketplace==='ozon'&&kind==='finance'&&shape.dashboardVersion!==8
+  const outdated=connection.marketplace==='ozon'&&kind==='finance'&&shape.dashboardVersion!==9
     ||connection.marketplace==='wildberries'&&kind==='snapshot'&&shape.funnel&&!shape.wbDailyFunnel;
   if(outdated&&row.state==='ready'){
     await pool.query("UPDATE marketplace_sync_jobs SET state='queued',next_attempt_at=now() WHERE id=$1 AND state='ready'",[id]);
