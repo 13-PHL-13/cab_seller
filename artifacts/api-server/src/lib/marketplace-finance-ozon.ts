@@ -168,17 +168,18 @@ export function ozonDashboardFinance(rows:unknown[]) {
 // Counts only: diagnose schema coverage without exposing posting numbers,
 // SKUs, company details or raw provider responses.
 export function ozonAccrualShape(rows:unknown[]){
-  let postingRows=0,emptyPostings=0,products=0,commissions=0,saleAmounts=0,salePrices=0,deliveryAmounts=0;
+  let postingRows=0,emptyPostings=0,products=0,commissions=0,saleAmounts=0,scalarSaleAmounts=0,salePrices=0,deliveryAmounts=0;
   for(const raw of rows){const row=asRecord(raw);if(row.accrued_category!=='POSTING')continue;
     postingRows++;const items=asArray(asRecord(row.posting).products);if(!items.length)emptyPostings++;
     for(const rawProduct of items){products++;const product=asRecord(rawProduct),fee=asRecord(product.commission);
       if(Object.keys(fee).length)commissions++;
       if(amount(asRecord(fee.sale_amount).amount)!==null)saleAmounts++;
+      if(amount(fee.sale_amount)!==null)scalarSaleAmounts++;
       if(amount(asRecord(fee.sale_price).amount)!==null)salePrices++;
       if(amount(asRecord(asRecord(product.delivery).total_accrued).amount)!==null)deliveryAmounts++;
     }
   }
-  return {postingRows,emptyPostings,products,commissions,saleAmounts,salePrices,deliveryAmounts};
+  return {postingRows,emptyPostings,products,commissions,saleAmounts,scalarSaleAmounts,salePrices,deliveryAmounts};
 }
 
 async function requestOzonAccrualDay(
