@@ -67,6 +67,9 @@ test('Ozon dashboard reconciles realized revenue and net accruals including refu
   assert.equal(ozonDashboardFinance([{accrued_category:'POSTING',total_amount:{amount:'750'}}]).revenue,null);
   assert.equal(ozonDashboardFinance([{accrued_category:'POSTING',total_amount:{amount:'750'}}]).expenses,null);
   assert.equal(ozonDashboardFinance([]).revenue,0);
+  const deliveryOnly={accrued_category:'POSTING',total_amount:{amount:'-30',currency:'RUB'},posting:{products:[{delivery:{total_accrued:{amount:'-30'}}}]}};
+  assert.deepEqual(ozonDashboardFinance([posting(1000,750,-100,-150),deliveryOnly]),{revenue:1000,expenses:280,commission:100,logistics:180,other:0});
+  assert.equal(ozonDashboardFinance([{...deliveryOnly,total_amount:{amount:'400',currency:'RUB'}}]).revenue,null);
 });
 
 test("aggregates Ozon accrual totals by top-level category without double counting", () => {
