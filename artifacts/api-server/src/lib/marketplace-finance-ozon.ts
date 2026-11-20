@@ -13,6 +13,7 @@ export type OzonFinanceTotals = {
 };
 
 export type OzonFinanceResult = {
+  dashboardDiagnostics?: ReturnType<typeof ozonAccrualShape>;
   dashboard?: {revenue:number|null;expenses:number|null;commission:number|null;logistics:number|null;other:number|null};
   marketplace: "ozon";
   currency: string | null;
@@ -164,6 +165,22 @@ export function ozonDashboardFinance(rows:unknown[]) {
     other:expenses!==null&&detailsComplete?round(expenses-commission-logistics):null};
 }
 
+// Counts only: diagnose schema coverage without exposing posting numbers,
+// SKUs, company details or raw provider responses.
+export function ozonAccrualShape(rows:unknown[]){
+  let postingRows=0,emptyPostings=0,products=0,commissions=0,saleAmounts=0,salePrices=0,deliveryAmounts=0;
+  for(const raw of rows){const row=asRecord(raw);if(row.accrued_category!=='POSTING')continue;
+    postingRows++;const items=asArray(asRecord(row.posting).products);if(!items.length)emptyPostings++;
+    for(const rawProduct of items){products++;const product=asRecord(rawProduct),fee=asRecord(product.commission);
+      if(Object.keys(fee).length)commissions++;
+      if(amount(asRecord(fee.sale_amount).amount)!==null)saleAmounts++;
+      if(amount(asRecord(fee.sale_price).amount)!==null)salePrices++;
+      if(amount(asRecord(asRecord(product.delivery).total_accrued).amount)!==null)deliveryAmounts++;
+    }
+  }
+  return {postingRows,emptyPostings,products,commissions,saleAmounts,salePrices,deliveryAmounts};
+}
+
 async function requestOzonAccrualDay(
   credentials: { clientId: string; apiKey: string },
   date: string,
@@ -261,6 +278,7 @@ export async function getOzonFinanceReport(
   return {
     marketplace: "ozon",
     dashboard:ozonDashboardFinance(rows),
+    dashboardDiagnostics:ozonAccrualShape(rows),
     currency,
     from,
     to,
