@@ -12,9 +12,11 @@ type DailyPoint = {
   cartAdds: number;
   boughtUnits?: number | null;
   boughtAmount?: number | null;
+  missing?: Partial<Record<'revenue'|'orders'|'views'|'carts',boolean>>;
 };
 
 export type MarketplaceSnapshot = {
+  metricSchemaVersion?:number;
   daily: Map<string, DailyPoint>;
   funnel: Omit<DailyPoint, "date" | "revenue">;
   unavailable?: { sales?: string; funnel?: string; views?: string; carts?: string; orders?: string; revenue?: string; buyouts?: string };
@@ -179,6 +181,7 @@ export async function getOzonSnapshot(
     else throw error;
   }
   const snapshot = emptySnapshot();
+  snapshot.metricSchemaVersion=2;
 
   for (const rawRow of getOzonRows(response)) {
     const row = asRecord(rawRow);
@@ -189,15 +192,18 @@ export async function getOzonSnapshot(
     if (!date) continue;
 
     const fields=['revenue','orders','views','carts'] as const;
+    const missing:NonNullable<DailyPoint['missing']>={};
     const labels=['сумма заказов','заказанные товары','просмотры','добавления в корзину'];
     fields.forEach((field,index)=>{
       const value=metrics[index];
       if(value===undefined || value===null || value==='' || !Number.isFinite(Number(value))) {
         snapshot.unavailable??={};
+        missing[field]=true;
         snapshot.unavailable[field]=`Ozon не передал показатель «${labels[index]}»${index>=2 ? ': расширенная аналитика API требует Premium Plus или Premium Pro' : ''}.`;
       }
     });
     const point: DailyPoint = {
+      missing,
       date,
       revenue: asNumber(metrics[0]),
       // Ozon exposes ordered units, not an order count or confirmed buyouts.
@@ -215,6 +221,17 @@ export async function getOzonSnapshot(
   }
 
   return snapshot;
+}
+
+export function projectOzonPeriod<T extends MarketplaceSnapshot>(snapshot:T,from:string,to:string):T {
+  const result={...snapshot,daily:new Map([...snapshot.daily].filter(([date])=>date>=from&&date<=to)),unavailable:{...snapshot.unavailable}};
+  if(snapshot.metricSchemaVersion===2){
+    for(const field of ['revenue','orders','views','carts'] as const){
+      if(![...result.daily.values()].some(point=>point.missing?.[field]))delete result.unavailable[field];
+    }
+  }
+  result.funnel=[...result.daily.values()].reduce((total,point)=>({orders:total.orders+point.orders,units:total.units+(point.boughtUnits??point.units),views:total.views+point.views,cartAdds:total.cartAdds+point.cartAdds}),{orders:0,units:0,views:0,cartAdds:0});
+  return result;
 }
 
 async function requestWildberriesFunnel(

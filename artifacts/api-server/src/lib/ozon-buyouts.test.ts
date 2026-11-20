@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {realizationDay,getOzonBuyouts} from './ozon-buyouts.ts';
-import {getOzonSnapshot,type MarketplaceSnapshot} from './marketplace-data.ts';
+import {getOzonSnapshot,projectOzonPeriod,type MarketplaceSnapshot} from './marketplace-data.ts';
 import {dashboardStoreData} from './dashboard-layout.ts';
 import {syncContext,SyncRejected} from './sync-context.ts';
 
@@ -39,4 +39,18 @@ test('buyouts populate both the totals and the daily chart, while partial covera
   assert.equal(complete.totals.bought,3);assert.equal(complete.totals.boughtAmount,240);assert.equal(complete.daily[0].bought,3);
   const partial=dashboardStoreData({...snapshot,daily:new Map([...snapshot.daily,['2026-11-19',{date:'2026-11-19',orders:0,revenue:0,units:0,views:0,cartAdds:0,boughtUnits:null,boughtAmount:null}]])},'ozon');
   assert.equal(partial.totals.bought,null);assert.equal(partial.daily[0].bought,3);
+});
+
+
+test('an old missing metric cannot hide available Premium data in the selected period',async(t)=>{
+  t.mock.method(globalThis,'fetch',async()=>new Response(JSON.stringify({result:{data:[
+    {dimensions:[{id:'2026-11-19'}],metrics:[100,1,null,null]},
+    {dimensions:[{id:'2026-11-20'}],metrics:[200,2,10,3]},
+  ]}})));
+  const raw=await getOzonSnapshot({clientId:'fixture',apiKey:'fixture'},'2026-11-19','2026-11-20');
+  const selected=dashboardStoreData(projectOzonPeriod(raw,'2026-11-20','2026-11-20'),'ozon');
+  assert.equal(selected.totals.views,10);assert.equal(selected.totals.carts,3);assert.equal(selected.totals.orders,2);
+  const both=dashboardStoreData(projectOzonPeriod(raw,'2026-11-19','2026-11-20'),'ozon');
+  assert.equal(both.totals.views,null);assert.equal(both.daily[1].views,10);assert.equal(both.daily[0].views,null);
+  assert.ok(raw.unavailable?.views);
 });

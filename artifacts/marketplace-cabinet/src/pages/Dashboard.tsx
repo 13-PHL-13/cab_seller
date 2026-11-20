@@ -123,7 +123,7 @@ function Toggle({
   );
 }
 function CoverageNotice({stores,window,metrics,previous}:{stores:MarketplaceStore[];window:DashboardWindow;metrics:DashboardMetric[];previous?:DashboardWindow}) {
-  const missing=stores.filter(store=>metrics.some(key=>metricCoverage(stores,window,key,true).excluded.some(s=>s.id===store.id)));
+  const missing=stores.filter(store=>metrics.some(key=>metricCoverage(stores,window,key,true).excluded.some(s=>s.id===store.id)||metricCoverage(stores,window,key).excluded.some(s=>s.id===store.id)));
   const changed=previous && metrics.some(key=>metricCoverage(stores,window,key,true).included.map(s=>s.id).sort().join(',')!==metricCoverage(stores,previous,key,true).included.map(s=>s.id).sort().join(','));
   if(!missing.length && !changed)return null;
   const names=missing.map(s=>`${platformName(s.marketplace)} · ${s.storeName}`).join(', ');
