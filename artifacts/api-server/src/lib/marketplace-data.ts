@@ -248,7 +248,7 @@ async function requestWildberriesSales(
 ): Promise<unknown[]> {
   // Both dashboard windows consume the same raw feed. Share that request;
   // supplier/sales has a much stricter quota than the analytics endpoint.
-  const rollingStart = new Date(Date.now()-90*86400000).toISOString().slice(0,10);
+  const rollingStart = new Date(Date.now()-89*86400000).toISOString().slice(0,10);
   const sourceFrom = from < rollingStart ? from : rollingStart;
   const key=createHash('sha256').update(credentials.apiKey).update(sourceFrom).digest('hex');
   if (syncContext.getStore()) return loadWildberriesSales(credentials, sourceFrom);
