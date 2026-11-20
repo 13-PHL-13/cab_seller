@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { setTimeout as delay } from 'node:timers/promises';
 
 test('PostgreSQL queue survives restart, shares pages, honours 429 and credential rotation', { skip: !process.env.TEST_DATABASE_URL }, async (t) => {
   const url = new URL(process.env.TEST_DATABASE_URL!);
@@ -8,7 +9,7 @@ test('PostgreSQL queue survives restart, shares pages, honours 429 and credentia
   process.env.SESSION_SECRET = 'isolated-sync-test-fixture';
   const { pool } = await import('@workspace/db');
   const { encryptCredentials } = await import('./marketplace-credentials.ts');
-  const { ensureMarketplaceSyncSchema, sharedDataset, workOne } = await import('./marketplace-sync.ts');
+  const { ensureMarketplaceSyncSchema, sharedDataset, startMarketplaceSync, workOne } = await import('./marketplace-sync.ts');
   const { providerFetch, SyncDeferred } = await import('./sync-context.ts');
   await pool.query(`CREATE TABLE marketplace_connections(id serial PRIMARY KEY,company_id uuid NOT NULL,marketplace text NOT NULL,store_name text NOT NULL,credentials_ciphertext text NOT NULL,last_sync_at timestamptz)`);
   await ensureMarketplaceSyncSchema();
@@ -153,5 +154,39 @@ test('PostgreSQL queue survives restart, shares pages, honours 429 and credentia
     wbData=dashboardStoreData(await sharedDataset(connection,'snapshot',{from:prior,to:day}),'wildberries');
     assert.ok(wbData.daily.every(p=>p.orders===2&&p.views===10));
     assert.equal(wbCalls,4); // one period, one sales feed, two daily pages
+
+    // On startup, a failed refresh must not prevent already queued work
+    // from running. Jobs whose persisted deadline is in the future still wait.
+    await pool.query('TRUNCATE marketplace_sync_jobs,marketplace_sync_pages,marketplace_sync_budgets');
+    await assert.rejects(sharedDataset(connection, 'finance', { from: 'overdue' }), SyncDeferred);
+    await assert.rejects(sharedDataset(connection, 'finance', { from: 'future' }), SyncDeferred);
+    await pool.query("UPDATE marketplace_sync_jobs SET state='waiting',next_attempt_at=CASE WHEN params->>'from'='future' THEN now()+interval '30 minutes' ELSE now()-interval '1 minute' END");
+    const originalQuery = pool.query;
+    let seedFailed = false;
+    const queryMock = t.mock.method(pool, 'query', function (...args: Parameters<typeof originalQuery>) {
+      if (typeof args[0] === 'string' && args[0].includes("marketplace IN ('ozon','wildberries')")) {
+        seedFailed = true;
+        return Promise.reject(new Error('Fixture: scheduler query failed'));
+      }
+      return Reflect.apply(originalQuery, pool, args);
+    });
+    const stop = startMarketplaceSync(handlers);
+    try {
+      const deadline = Date.now() + 5000;
+      const getJobs = () => pool.query("SELECT params->>'from' AS period, state FROM marketplace_sync_jobs ORDER BY period");
+      let jobs = await getJobs();
+      while (jobs.rows[1]?.state !== 'ready' && Date.now() < deadline) {
+        await delay(25);
+        jobs = await getJobs();
+      }
+      assert.equal(seedFailed, true);
+      assert.deepEqual(jobs.rows, [
+        { period: 'future', state: 'waiting' },
+        { period: 'overdue', state: 'ready' },
+      ]);
+    } finally {
+      stop();
+      queryMock.mock.restore();
+    }
   } finally { await pool.end(); }
 });
