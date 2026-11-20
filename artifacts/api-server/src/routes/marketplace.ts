@@ -778,7 +778,7 @@ router.get("/marketplace/dashboard", async (req, res): Promise<void> => {
               eq(marketplaceConnectionsTable.companyId, companyIdFromRequest(req)),
             ));
             const wait = error.retryAfterSeconds >= 3600 ? `${Math.ceil(error.retryAfterSeconds / 3600)} ч.` : error.retryAfterSeconds >= 60 ? `${Math.ceil(error.retryAfterSeconds / 60)} мин.` : `${error.retryAfterSeconds} сек.`;
-            partialErrors.push(`${target === "ozon" ? "Ozon" : "ВБ"} · ${connection.storeName}: API временно ограничил запросы (429). Подключение активно; повторите через ${wait}.`);
+            partialErrors.push(`ВБ · ${connection.storeName}: API временно ограничил запросы (429). Подключение активно; повторите через ${wait}.`);
           } else {
             req.log.warn({ marketplace: target, storeId: connection.id }, "Marketplace data request failed");
             partialErrors.push(`${target === "ozon" ? "Ozon" : "ВБ"} · ${connection.storeName}: ${errorMessage(error)}`);
