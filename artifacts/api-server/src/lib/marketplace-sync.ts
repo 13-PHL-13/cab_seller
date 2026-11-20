@@ -181,6 +181,8 @@ async function reserveBudget(id: string, interval: number, dailyLimit?:number): 
 async function pageFetch(job: Job, connection: MarketplaceConnection, url: string, init: RequestInit): Promise<Response> {
   assertReplaySafe(url, init.method ?? 'GET');
   const policy = syncPolicy(url);
+  const sourceLabel:Record<string,string>={'wb:funnel':'ВБ — воронка','wb:sales':'ВБ — продажи','wb:finance':'ВБ — финансовый отчёт','wb:prices':'ВБ — цены','ozon:analytics':'Ozon — аналитика','ozon:subscription':'Ozon — тариф'};
+  const source=sourceLabel[policy.group]??(connection.marketplace==='ozon'?'Ozon':'ВБ');
   const pageId = hash(`${connection.companyId}:${connection.id}:${job.revision}:${init.method ?? 'GET'}:${url}:${String(init.body ?? '')}`);
   const cached = await pool.query(`SELECT payload,status,fetched_at FROM marketplace_sync_pages WHERE id=$1 AND (expires_at>now() OR (status<400 AND fetched_at>=$2))`, [pageId, job.generation]);
   if (cached.rows[0]) {
@@ -190,15 +192,15 @@ async function pageFetch(job: Job, connection: MarketplaceConnection, url: strin
   }
   const budget = hash(`${budgetScope(connection)}:${policy.group}`);
   try {await reserveBudget(budget, policy.interval,policy.group==='ozon:analytics'?50:undefined);}
-  catch(error){if(error instanceof SyncDeferred)throw new SyncDeferred(error.retryAt,'budget',`Пауза общего загрузчика: ${policy.group}. Соблюдаем лимит запросов.`);throw error;}
+  catch(error){if(error instanceof SyncDeferred)throw new SyncDeferred(error.retryAt,'budget',`${source}: соблюдаем интервал запросов.`);throw error;}
   let response: Response;
   try { response = await fetch(url, { ...init, signal: AbortSignal.timeout(30_000), redirect: 'error' }); }
-  catch { throw new SyncDeferred(Date.now() + Math.max(60_000,policy.interval), 'network',`Нет ответа от ${new URL(url).hostname}.`); }
+  catch { throw new SyncDeferred(Date.now() + Math.max(60_000,policy.interval), 'network',`${source}: площадка не ответила.`); }
   if (response.status === 429 || response.status === 408 || response.status >= 500) {
     const retryAt = retryAtFromHeaders(response.headers, Date.now(), response.status === 429 ? policy.interval : 60_000);
     const saved = await pool.query('UPDATE marketplace_sync_budgets SET next_allowed_at=GREATEST(next_allowed_at,$2) WHERE id=$1 RETURNING next_allowed_at', [budget, new Date(retryAt)]);
     await response.body?.cancel();
-    throw new SyncDeferred(saved.rows[0].next_allowed_at.getTime(), 'provider',`Площадка вернула HTTP ${response.status}: ${policy.group}.`);
+    throw new SyncDeferred(saved.rows[0].next_allowed_at.getTime(), 'provider',`${source}: площадка вернула HTTP ${response.status}.`);
   }
   if (!response.ok) {
     const responseText=await response.text();
