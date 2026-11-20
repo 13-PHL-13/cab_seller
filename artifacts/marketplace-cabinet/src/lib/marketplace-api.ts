@@ -196,6 +196,7 @@ export function getWildberriesFinanceReport(
 
 
 export interface OzonFinanceReport {
+  dailyDashboard?:Array<{date:string;revenue:number|null;expenses:number|null;commission:number|null;logistics:number|null;other:number|null}>;
   dashboard?:{revenue:number|null;expenses:number|null;commission:number|null;logistics:number|null;other:number|null};
   marketplace: "ozon";
   currency: string | null;

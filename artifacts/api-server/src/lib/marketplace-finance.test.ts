@@ -58,7 +58,15 @@ test("ignores missing, malformed and non-finite amounts without producing NaN", 
 });
 
 
-import { aggregateOzonAccruals,ozonDashboardFinance } from "./marketplace-finance-ozon.ts";
+import { aggregateOzonAccruals,ozonDashboardFinance,ozonDailyDashboard } from "./marketplace-finance-ozon.ts";
+
+test('daily accrual projections preserve true empty days and reject undated or out-of-period rows',()=>{
+ const rows=[{date:'2026-10-01',accrued_category:'ITEM',total_amount:{amount:'-10',currency:'RUB'}},{date:'2026-10-03',accrued_category:'ITEM',total_amount:{amount:'-20',currency:'RUB'}}];
+ const days=ozonDailyDashboard(rows,'2026-10-01','2026-10-03');
+ assert.equal(days?.length,3);assert.equal(days?.[0].expenses,10);assert.equal(days?.[1].expenses,0);assert.equal(days?.[2].expenses,20);
+ assert.equal(ozonDailyDashboard([...rows,{accrued_category:'ITEM'}],'2026-10-01','2026-10-03'),undefined);
+ assert.equal(ozonDailyDashboard(rows,'2026-10-02','2026-10-03'),undefined);
+});
 
 test('Ozon dashboard reconciles realized revenue and net accruals including refunds',()=>{
   const posting=(sale:number,net:number,fee:number,delivery:number)=>({accrued_category:'POSTING',total_amount:{amount:String(net),currency:'RUB'},posting:{products:[{commission:{sale_amount:{amount:String(sale)},commission:{amount:String(fee)}},delivery:{total_accrued:{amount:String(delivery)}}}]}});

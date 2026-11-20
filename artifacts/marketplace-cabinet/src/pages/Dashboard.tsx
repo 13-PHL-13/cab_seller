@@ -17,6 +17,7 @@ import {
 } from "@/lib/marketplace-api";
 import { workspaceRequest as request } from "@/lib/collaboration-api";
 import { getDashboardWindow } from "@/lib/dashboard-api";
+import {previousFinancePeriod,financePeriodAmounts,financeComparisonBaseline} from '@/lib/finance-comparison';
 import {
   completeSum,
   metricCoverage,
@@ -443,6 +444,7 @@ export default function DashboardPage() {
       Record<number, WildberriesFinanceReport>
     >({}),
     [ozonReports,setOzonReports]=useState<Record<number,OzonFinanceReport>>({}),
+    [previousOzonReports,setPreviousOzonReports]=useState<Record<number,OzonFinanceReport>>({}),
     [extra, setExtra] = useState<number | null>(null),
     [financeErrors, setFinanceErrors] = useState<string[]>([]),
     [topVisible, setTopVisible] = useState(false),
@@ -497,6 +499,7 @@ export default function DashboardPage() {
     platforms = [...new Set(selected.map((s) => s.marketplace))];
   const companyMonth = localToday().slice(0, 7) + "-01",
     today = localToday(),
+    financePrevious=previousFinancePeriod(today),
     chosen = windows[period] ?? fallbackWindow(),
     previous = period === "current" ? windows.previous : undefined,
     dates = calendarDays(chosen.from, chosen.to);
@@ -533,6 +536,7 @@ export default function DashboardPage() {
     let active = true;
     setReports({});
     setOzonReports({});
+    setPreviousOzonReports({});
     setExtra(null);
     setFinanceErrors([]);
     if (!canFinance || !stores.length) return;
@@ -559,12 +563,19 @@ export default function DashboardPage() {
       setReports(next);
       setFinanceErrors(current=>[...current.filter(message=>message.startsWith('Ozon · ')),...warnings]);
     });
-    void Promise.allSettled(ozon.map(s=>request<OzonFinanceReport>('/api/marketplace/finance/ozon?'+new URLSearchParams({from:companyMonth,to:today,storeId:String(s.id)})))).then(results=>{
+    void Promise.all(ozon.map(async s=>({store:s,results:await Promise.allSettled([
+      request<OzonFinanceReport>('/api/marketplace/finance/ozon?'+new URLSearchParams({from:companyMonth,to:today,storeId:String(s.id)})),
+      request<OzonFinanceReport>('/api/marketplace/finance/ozon?'+new URLSearchParams({from:financePrevious.from,to:financePrevious.sourceTo,storeId:String(s.id)})),
+    ])}))).then(results=>{
       if(!active)return;
       const next:Record<number,OzonFinanceReport>={};
+      const past:Record<number,OzonFinanceReport>={};
       const warnings:string[]=[];
-      results.forEach((result,index)=>{if(result.status==='fulfilled')next[ozon[index].id]=result.value;else warnings.push('Ozon · '+ozon[index].storeName+': '+result.reason.message);});
-      setOzonReports(next);setFinanceErrors(current=>[...current.filter(message=>!message.startsWith('Ozon · ')),...warnings]);
+      results.forEach(({store,results:[current,previous]})=>{
+        if(current.status==='fulfilled')next[store.id]=current.value;else warnings.push('Ozon · '+store.storeName+': '+current.reason.message);
+        if(previous.status==='fulfilled')past[store.id]=previous.value;else warnings.push('Ozon · '+store.storeName+', сравнение: '+previous.reason.message);
+      });
+      setOzonReports(next);setPreviousOzonReports(past);setFinanceErrors(current=>[...current.filter(message=>!message.startsWith('Ozon · ')),...warnings]);
     });
     if (platform === "all" && !store)
       void request<SellerExpensesReport>(
@@ -619,6 +630,12 @@ export default function DashboardPage() {
       ),
     [reports,ozonReports, selected.map((s) => s.id).join(",")],
   ) as Record<number, Finance>;
+  const previousFinances=Object.fromEntries(selected.map(store=>{
+    const amounts=financePrevious.comparable?financePeriodAmounts(previousOzonReports[store.id],financePrevious.from,financePrevious.to):undefined;
+    return [store.id,{...blankFinance(),revenue:amounts?.revenue??null,expenses:amounts?.expenses??null}];
+  })) as Record<number,Finance>;
+  const financeBaseline=(own:MarketplaceStore[],key:FinanceKey)=>financeComparisonBaseline(own,finances,previousFinances,key);
+  const financeComparisonTitle=`Изменение к ${dateLabel(financePrevious.from)} — ${dateLabel(financePrevious.to)}: одинаковый состав магазинов.`;
   const totals = Object.fromEntries(
     metricLabels.map(([key]) => [
       key,
@@ -1274,7 +1291,8 @@ export default function DashboardPage() {
                     />
                     <Change
                       value={totals[key]}
-                      previous={null}
+                      previous={financeBaseline(selected,key)}
+                      title={financeComparisonTitle}
                       inverse={["expenses", "cost", "ads", "extra"].includes(
                         key,
                       )}
@@ -1294,7 +1312,7 @@ export default function DashboardPage() {
                               )}
                               percent={key === "profitability"}
                             />
-                            <Change value={null} previous={null} />
+                            <Change value={completeSum(selected.filter(store=>store.marketplace===p).map(store=>finances[store.id]?.[key]).filter(value=>typeof value==='number'&&Number.isFinite(value)))} previous={financeBaseline(selected.filter(store=>store.marketplace===p),key)} inverse={['expenses','cost','ads','extra'].includes(key)} title={financeComparisonTitle} />
                           </div>
                         </div>
                       ))}
@@ -1364,7 +1382,7 @@ export default function DashboardPage() {
                       >
                         <p className="store-revenue">
                           Выручка: <FinanceValue value={finance.revenue} />
-                          <Change value={finance.revenue} previous={null} />
+                          <Change value={finance.revenue} previous={financeBaseline([s],'revenue')} title={financeComparisonTitle} />
                         </p>
                         <Waterfall finance={finance} name={s.storeName} />
                         <div className="profitability">

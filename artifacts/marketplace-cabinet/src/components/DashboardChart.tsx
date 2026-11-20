@@ -22,14 +22,17 @@ export function Change({
   value,
   previous,
   inverse = false,
+  title,
 }: {
   value: number | null;
   previous: number | null;
   inverse?: boolean;
+  title?:string;
 }) {
   const delta = change(value, previous);
   return (
     <span
+      title={title}
       className={
         "metric-change " +
         (delta === null || delta === 0

@@ -1,6 +1,28 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { completeSum,change,calendarDays,metricCoverage,metricSum,sameMetricCohort,chartCoverage,dailyMetricSum,sameDailyMetricCohort } from '../src/lib/dashboard-model.ts';
+import {previousFinancePeriod,financePeriodAmounts,financeComparisonBaseline} from '../src/lib/finance-comparison.ts';
+
+test('monthly finance compares matched elapsed days including year boundaries and shorter months',()=>{
+ assert.deepEqual(previousFinancePeriod('2026-11-20'),{from:'2026-10-01',to:'2026-10-20',sourceTo:'2026-10-31',comparable:true});
+ assert.equal(previousFinancePeriod('2026-01-20').from,'2025-12-01');
+ assert.equal(previousFinancePeriod('2024-03-29').comparable,true);
+ assert.equal(previousFinancePeriod('2026-03-31').comparable,false);
+});
+
+test('finance projections never compare a partial month against a full month or mismatched stores',()=>{
+ const amounts=(revenue,expenses)=>({revenue,expenses,commission:0,logistics:0,other:0});
+ const report={from:'2026-10-01',to:'2026-10-31',dashboard:amounts(9999,9999),dailyDashboard:[{date:'2026-10-01',...amounts(100,50)},{date:'2026-10-02',...amounts(200,70)}]};
+ assert.deepEqual(financePeriodAmounts(report,'2026-10-01','2026-10-02'),amounts(300,120));
+ assert.equal(financePeriodAmounts(report,'2026-10-01','2026-10-03'),undefined);
+ const broken=structuredClone(report);broken.dailyDashboard[0].revenue=null;
+ assert.equal(financePeriodAmounts(broken,'2026-10-01','2026-10-02').revenue,null);
+ const stores=[{id:1},{id:2}],current={1:{revenue:150},2:{revenue:null}},past={1:{revenue:100},2:{revenue:null}};
+ assert.equal(financeComparisonBaseline(stores,current,past,'revenue'),100);
+ assert.equal(change(150,financeComparisonBaseline(stores,current,past,'revenue')),50);
+ assert.equal(financeComparisonBaseline(stores,{...current,2:{revenue:30}},past,'revenue'),null);
+ assert.equal(change(150,financeComparisonBaseline(stores,current,{1:{revenue:0}},'revenue')),null);
+});
 
 test('platform charts retain available daily values and real zeroes without filling gaps or relaxing aggregate coverage',()=>{
  const stores=[{id:1,storeName:'A',marketplace:'wildberries'},{id:2,storeName:'B',marketplace:'wildberries'}];
