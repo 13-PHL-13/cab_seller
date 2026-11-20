@@ -249,7 +249,7 @@ export async function workOne(handlers: Handlers): Promise<boolean> {
   } catch (error) {
     const subscription=error instanceof SyncRejected && error.reason==='subscription';
     const deferred = error instanceof SyncDeferred || context.deferredUntil.length > 0 || subscription;
-    const failures = error instanceof SyncDeferred && error.reason === 'budget' ? job.failures : job.failures + 1;
+    const failures = subscription ? 0 : error instanceof SyncDeferred && error.reason === 'budget' ? job.failures : job.failures + 1;
     const retryAt = subscription ? Date.now()+6*3600_000 : error instanceof SyncDeferred ? error.retryAt : context.deferredUntil.length ? Math.min(...context.deferredUntil) : Date.now() + 3600_000;
     console.warn('Marketplace dataset deferred or blocked', { connectionId: job.connection_id, kind: job.kind, deferred, failures });
     await pool.query(`UPDATE marketplace_sync_jobs SET state=$3,next_attempt_at=$4,lease_until=NULL,lease_token=NULL,failures=$5,last_error=$6 WHERE id=$1 AND lease_token=$2`,
