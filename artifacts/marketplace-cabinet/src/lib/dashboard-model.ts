@@ -11,6 +11,7 @@ export interface DashboardStore {
   data: {
     totals: Record<DashboardMetric, number | null>;
     daily: DashboardPoint[];
+    reasons?: Partial<Record<DashboardMetric,string>>;
   };
 }
 export interface DashboardWindow {

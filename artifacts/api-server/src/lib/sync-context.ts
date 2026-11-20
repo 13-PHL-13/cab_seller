@@ -11,9 +11,11 @@ export class SyncDeferred extends Error {
 }
 export class SyncRejected extends Error {
   readonly status: number;
-  constructor(status: number) {
-    super(`Площадка отклонила запрос (HTTP ${status}).`);
+  readonly reason: 'subscription' | 'other';
+  constructor(status: number,reason:'subscription'|'other'='other') {
+    super(reason==='subscription' ? 'Ozon: данные не загружены из-за ограничения подписки. Требуется Premium Plus или Premium Pro.' : `Площадка отклонила запрос (HTTP ${status}).`);
     this.status=status;
+    this.reason=reason;
   }
 }
 
@@ -62,7 +64,7 @@ export function syncPolicy(url: string): { group: string; interval: number; ttl:
   }
   if (hostname === 'api-seller.ozon.ru') {
     // 50/day baseline for analytics; use one shared budget for all dimensions.
-    if (pathname === '/v1/analytics/data') return { group: 'ozon:analytics', interval: 30 * 60_000, ttl: 2 * 3600_000 };
+    if (pathname === '/v1/analytics/data') return { group: 'ozon:analytics', interval: 60_000, ttl: 2 * 3600_000 };
     return { group: `ozon:${pathname}`, interval: 1000, ttl: pathname.includes('/finance/') ? 3600_000 : 6 * 3600_000 };
   }
   throw new Error('Этот адрес не разрешён общему загрузчику.');
@@ -78,6 +80,7 @@ export function assertReplaySafe(url: string, method: string): void {
     'GET https://discounts-prices-api.wildberries.ru/api/v2/list/goods/filter',
     'POST https://api-seller.ozon.ru/v1/analytics/data',
     'POST https://api-seller.ozon.ru/v1/finance/accrual/by-day',
+    'POST https://api-seller.ozon.ru/v1/finance/realization/by-day',
     'POST https://api-seller.ozon.ru/v3/product/list',
     'POST https://api-seller.ozon.ru/v3/product/info/list',
   ]);

@@ -127,7 +127,8 @@ function CoverageNotice({stores,window,metrics,previous}:{stores:MarketplaceStor
   const changed=previous && metrics.some(key=>metricCoverage(stores,window,key,true).included.map(s=>s.id).sort().join(',')!==metricCoverage(stores,previous,key,true).included.map(s=>s.id).sort().join(','));
   if(!missing.length && !changed)return null;
   const names=missing.map(s=>`${platformName(s.marketplace)} · ${s.storeName}`).join(', ');
-  return <p className="dashboard-coverage" role="note" title={changed ? 'Сравнение скрыто: за периоды доступен разный состав магазинов.' : undefined}>{missing.length ? metrics.length>1 ? `Часть показателей недоступна: ${names}. Итог по доступным данным.` : `Итог без данных: ${names}.` : 'Сравнение периодов недоступно.'}</p>;
+  const reasons=[...new Set(missing.flatMap(store=>metrics.map(key=>window.stores.find(s=>s.id===store.id)?.data.reasons?.[key]).filter(Boolean)))].join(' ');
+  return <p className="dashboard-coverage" role="note" title={changed ? 'Сравнение скрыто: за периоды доступен разный состав магазинов.' : undefined}>{missing.length ? metrics.length>1 ? `Часть показателей недоступна: ${names}. Итог по доступным данным.` : `Итог без данных: ${names}.` : 'Сравнение периодов недоступно.'} {reasons}</p>;
 }
 function sumMetric(
   stores: MarketplaceStore[],

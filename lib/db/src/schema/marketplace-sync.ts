@@ -26,4 +26,5 @@ export const marketplaceSyncPagesTable = pgTable('marketplace_sync_pages', {
 });
 export const marketplaceSyncBudgetsTable = pgTable('marketplace_sync_budgets', {
   id: text('id').primaryKey(), nextAllowedAt: timestamp('next_allowed_at',{withTimezone:true}).notNull().defaultNow(),
+  requestDay:text('request_day'),requestCount:integer('request_count').notNull().default(0),
 });
