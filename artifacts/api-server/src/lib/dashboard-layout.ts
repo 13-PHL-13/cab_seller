@@ -19,16 +19,19 @@ export function dashboardStoreData(
   platform: "ozon" | "wildberries",
 ) {
   const ozon = platform === "ozon";
+  const points=[...snapshot.daily.values()];
+  const buyoutTotal=(field:'boughtUnits'|'boughtAmount')=>points.length && points.every(point=>typeof point[field]==='number') ? points.reduce((sum,point)=>sum+point[field]!,0) : null;
   return {
+    reasons:{views:snapshot.unavailable?.views??snapshot.unavailable?.funnel,carts:snapshot.unavailable?.carts??snapshot.unavailable?.funnel,orders:snapshot.unavailable?.orders,bought:snapshot.unavailable?.buyouts,boughtAmount:snapshot.unavailable?.buyouts},
     totals: {
       views: snapshot.unavailable?.funnel || snapshot.unavailable?.views ? null : snapshot.funnel.views as number | null,
       carts: snapshot.unavailable?.funnel || snapshot.unavailable?.carts ? null : snapshot.funnel.cartAdds as number | null,
       orders: ozon && !snapshot.unavailable?.orders ? snapshot.funnel.orders : null,
-      bought: ozon || snapshot.unavailable?.sales ? null : [...snapshot.daily.values()].reduce((n,p)=>n+p.units,0),
+      bought: ozon ? buyoutTotal('boughtUnits') : snapshot.unavailable?.sales ? null : points.reduce((n,p)=>n+p.units,0),
       orderAmount: ozon && !snapshot.unavailable?.revenue
         ? [...snapshot.daily.values()].reduce((n, p) => n + p.revenue, 0)
         : null,
-      boughtAmount: ozon || snapshot.unavailable?.sales
+      boughtAmount: ozon ? buyoutTotal('boughtAmount') : snapshot.unavailable?.sales
         ? null
         : [...snapshot.daily.values()].reduce((n, p) => n + p.revenue, 0),
     },
@@ -37,9 +40,9 @@ export function dashboardStoreData(
       views: ozon && !snapshot.unavailable?.views ? p.views : null,
       carts: ozon && !snapshot.unavailable?.carts ? p.cartAdds : null,
       orders: ozon && !snapshot.unavailable?.orders ? p.orders : null,
-      bought: ozon ? null : p.units,
+      bought: ozon ? p.boughtUnits??null : p.units,
       orderAmount: ozon && !snapshot.unavailable?.revenue ? p.revenue : null,
-      boughtAmount: ozon ? null : p.revenue,
+      boughtAmount: ozon ? p.boughtAmount??null : p.revenue,
     })),
   };
 }

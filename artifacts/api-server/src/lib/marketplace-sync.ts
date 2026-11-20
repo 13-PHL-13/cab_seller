@@ -2,11 +2,12 @@ import { createHash, randomUUID } from 'node:crypto';
 import { pool, type MarketplaceConnection } from '@workspace/db';
 import { decryptCredentials } from './marketplace-credentials';
 import type { MarketplaceSnapshot } from './marketplace-data';
+import type { OzonBuyouts } from './ozon-buyouts';
 import { dashboardWindow } from './dashboard-layout';
 import { SyncDeferred, SyncRejected, syncContext, syncPolicy, assertReplaySafe, retryAtFromHeaders, packSyncResult, unpackSyncResult, type SyncContext } from './sync-context';
 
-export type DatasetKind = 'snapshot' | 'finance' | 'catalog';
-type Params = { from?: string; to?: string };
+export type DatasetKind = 'snapshot' | 'finance' | 'catalog' | 'buyouts';
+type Params = { from?: string; to?: string; sourceVersion?: number };
 type Job = { id: string; connection_id: number; revision: string; kind: DatasetKind; params: Params; generation: Date; lease_token: string; failures: number };
 type Handler = (connection: MarketplaceConnection, params: Params) => Promise<unknown>;
 type Handlers = Record<DatasetKind, Handler>;
@@ -31,11 +32,37 @@ export async function sharedSnapshot(connection: MarketplaceConnection, from: st
   // WB funnel totals are period-specific; only its raw sales feed is shared.
   const range = connection.marketplace === 'ozon' && from >= rollingFrom && to <= today
     ? { from: rollingFrom, to: today } : { from, to };
-  const snapshot = await sharedDataset<MarketplaceSnapshot>(connection, 'snapshot', range);
-  if (connection.marketplace !== 'ozon') return snapshot;
+  if(connection.marketplace!=='ozon')return sharedDataset<MarketplaceSnapshot>(connection,'snapshot',range);
+  const oldestBuyout=new Date(Date.parse(today)-31*86400000).toISOString().slice(0,10);
+  const [analytic,buyouts]=await Promise.allSettled([
+    sharedDataset<MarketplaceSnapshot>(connection,'snapshot',range),
+    sharedDataset<OzonBuyouts>(connection,'buyouts',{from:oldestBuyout,to:today}),
+  ]);
+  if(analytic.status==='rejected' && buyouts.status==='rejected')throw analytic.reason;
+  const snapshot=analytic.status==='fulfilled' ? analytic.value : {
+    daily:new Map(),funnel:{orders:0,units:0,views:0,cartAdds:0},
+    unavailable:{orders:'Аналитика заказов Ozon загружается.',revenue:'Аналитика сумм Ozon загружается.',views:'Аналитика просмотров Ozon загружается.',carts:'Аналитика корзин Ozon загружается.'},
+    sync:buyouts.status==='fulfilled'?buyouts.value.sync:undefined!,
+  } as MarketplaceSnapshot & {sync:SyncStatus};
   snapshot.daily = new Map([...snapshot.daily].filter(([date]) => date >= from && date <= to));
+  let missingBuyouts=false;
+  for(let stamp=Date.parse(from);stamp<=Date.parse(to);stamp+=86400000){
+    const date=new Date(stamp).toISOString().slice(0,10);
+    const point=snapshot.daily.get(date)??{date,revenue:0,orders:0,units:0,views:0,cartAdds:0};
+    const realization=buyouts.status==='fulfilled'?buyouts.value.daily.get(date):undefined;
+    point.boughtUnits=realization?.units??null;point.boughtAmount=realization?.amount??null;
+    if(!realization)missingBuyouts=true;
+    snapshot.daily.set(date,point);
+  }
+  if(missingBuyouts){
+    snapshot.unavailable??={};
+    const error=buyouts.status==='rejected'?buyouts.reason:null;
+    snapshot.unavailable.buyouts=error instanceof SyncRejected && error.status===403
+      ? error.reason==='subscription' ? error.message : 'Ежедневный отчёт выкупов Ozon недоступен (403). Метод требует Premium Plus/Pro и прав API «Финансы».'
+      : error instanceof Error ? `Выкупы Ozon: ${error.message}` : 'Ежедневные выкупы Ozon доступны через API за последние 32 календарных дня.';
+  }
   snapshot.funnel = [...snapshot.daily.values()].reduce((total, point) => ({
-    orders: total.orders+point.orders, units: total.units+point.units,
+    orders: total.orders+point.orders, units: total.units+(point.boughtUnits??0),
     views: total.views+point.views, cartAdds: total.cartAdds+point.cartAdds,
   }), { orders: 0, units: 0, views: 0, cartAdds: 0 });
   return snapshot;
@@ -58,15 +85,19 @@ export async function ensureMarketplaceSyncSchema(): Promise<void> {
       fetched_at timestamptz NOT NULL DEFAULT now(), expires_at timestamptz NOT NULL
     );
     CREATE TABLE IF NOT EXISTS marketplace_sync_budgets (
-      id text PRIMARY KEY, next_allowed_at timestamptz NOT NULL DEFAULT now()
+      id text PRIMARY KEY, next_allowed_at timestamptz NOT NULL DEFAULT now(),request_day text,request_count integer NOT NULL DEFAULT 0
     );
   `);
+  await pool.query('ALTER TABLE marketplace_sync_budgets ADD COLUMN IF NOT EXISTS request_day text; ALTER TABLE marketplace_sync_budgets ADD COLUMN IF NOT EXISTS request_count integer NOT NULL DEFAULT 0');
   // Upgrade old generic Ozon parser failures once; safe HTTP errors below get
   // explicit codes and are never automatically reset by this migration.
   await pool.query(`UPDATE marketplace_sync_jobs j SET state='queued',next_attempt_at=now(),last_error=NULL
     FROM marketplace_connections c WHERE j.connection_id=c.id AND c.marketplace='ozon'
     AND j.kind='snapshot' AND j.state='blocked'
     AND j.last_error='Площадка отклонила загрузку или вернула неподдерживаемые данные.'`);
+  await pool.query(`UPDATE marketplace_sync_jobs j SET state='queued',next_attempt_at=now(),params=params||'{"sourceVersion":2}'::jsonb
+    FROM marketplace_connections c WHERE j.connection_id=c.id AND c.marketplace='ozon'
+    AND j.kind='snapshot' AND (j.params->>'sourceVersion') IS DISTINCT FROM '2'`);
 }
 
 // Callers MUST select the connection through their existing company/store ACL first.
@@ -80,11 +111,16 @@ export async function sharedDataset<T>(connection: MarketplaceConnection, kind: 
     ON CONFLICT(id) DO UPDATE SET accessed_at=now(),
       state=CASE WHEN marketplace_sync_jobs.state='ready' AND marketplace_sync_jobs.next_attempt_at<=now() THEN 'queued' ELSE marketplace_sync_jobs.state END,
       generation=CASE WHEN marketplace_sync_jobs.state='ready' AND marketplace_sync_jobs.next_attempt_at<=now() THEN now() ELSE marketplace_sync_jobs.generation END
-    RETURNING state,result,partial_result,updated_at,next_attempt_at`, [id, connection.id, revision, kind, params]);
+    RETURNING state,result,partial_result,updated_at,next_attempt_at,last_error`, [id, connection.id, revision, kind, connection.marketplace==='ozon' && kind==='snapshot'?{...params,sourceVersion:2}:params]);
   const row = rows[0];
   const value = row.result ?? row.partial_result;
   if (!value) {
-    if (row.state === 'blocked') throw new Error('Не удалось завершить выгрузку: нужна проверка ответа площадки и прав ключа в «Подключениях API».');
+    if(row.last_error==='Ozon: данные не загружены из-за ограничения подписки. Требуется Premium Plus или Premium Pro.')throw new SyncRejected(403,'subscription');
+    if (row.state === 'blocked') {
+      if(row.last_error==='Площадка отклонила запрос (HTTP 403).')throw new SyncRejected(403);
+      if(row.last_error==='Ozon: данные не загружены из-за ограничения подписки. Требуется Premium Plus или Premium Pro.')throw new SyncRejected(403,'subscription');
+      throw new Error(row.last_error??'Не удалось завершить выгрузку: нужна проверка ответа площадки и прав ключа.');
+    }
     throw new SyncDeferred(Math.max(Date.now() + 5000, new Date(row.next_attempt_at).getTime()));
   }
   const result = unpackSyncResult<T>(value);
@@ -108,14 +144,16 @@ function budgetScope(connection: MarketplaceConnection): string {
   return hash(`wb:basic:company:${connection.companyId}`);
 }
 
-async function reserveBudget(id: string, interval: number): Promise<void> {
+async function reserveBudget(id: string, interval: number, dailyLimit?:number): Promise<void> {
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
     await client.query('INSERT INTO marketplace_sync_budgets(id) VALUES($1) ON CONFLICT DO NOTHING', [id]);
-    const { rows } = await client.query('SELECT next_allowed_at,now() AS clock FROM marketplace_sync_budgets WHERE id=$1 FOR UPDATE', [id]);
+    const { rows } = await client.query("SELECT *,now() AS clock,to_char(now() AT TIME ZONE 'UTC','YYYY-MM-DD') AS today FROM marketplace_sync_budgets WHERE id=$1 FOR UPDATE", [id]);
     const next = rows[0].next_allowed_at.getTime();
     if (next > rows[0].clock.getTime()) throw new SyncDeferred(next);
+    if(dailyLimit && rows[0].request_day===rows[0].today && rows[0].request_count>=dailyLimit)throw new SyncDeferred(Date.parse(rows[0].today)+86400000);
+    if(dailyLimit)await client.query('UPDATE marketplace_sync_budgets SET request_count=CASE WHEN request_day=$2 THEN request_count+1 ELSE 1 END,request_day=$2 WHERE id=$1',[id,rows[0].today]);
     await client.query("UPDATE marketplace_sync_budgets SET next_allowed_at=now()+$2*interval '1 millisecond' WHERE id=$1", [id, interval]);
     await client.query('COMMIT');
   } catch (error) { await client.query('ROLLBACK'); throw error; }
@@ -126,14 +164,14 @@ async function pageFetch(job: Job, connection: MarketplaceConnection, url: strin
   assertReplaySafe(url, init.method ?? 'GET');
   const policy = syncPolicy(url);
   const pageId = hash(`${connection.companyId}:${connection.id}:${job.revision}:${init.method ?? 'GET'}:${url}:${String(init.body ?? '')}`);
-  const cached = await pool.query(`SELECT payload,status,fetched_at FROM marketplace_sync_pages WHERE id=$1 AND (expires_at>now() OR fetched_at>=$2)`, [pageId, job.generation]);
+  const cached = await pool.query(`SELECT payload,status,fetched_at FROM marketplace_sync_pages WHERE id=$1 AND (expires_at>now() OR (status<400 AND fetched_at>=$2))`, [pageId, job.generation]);
   if (cached.rows[0]) {
-    if (cached.rows[0].status >= 400) throw new SyncRejected(cached.rows[0].status);
+    if (cached.rows[0].status >= 400) throw new SyncRejected(cached.rows[0].status,JSON.parse(cached.rows[0].payload).reason==='subscription'?'subscription':'other');
     syncContext.getStore()?.sourceTimes?.push(cached.rows[0].fetched_at.getTime());
     return new Response(cached.rows[0].status === 204 ? null : cached.rows[0].payload, { status: cached.rows[0].status, headers: { 'Content-Type': 'application/json' } });
   }
   const budget = hash(`${budgetScope(connection)}:${policy.group}`);
-  await reserveBudget(budget, policy.interval);
+  await reserveBudget(budget, policy.interval,policy.group==='ozon:analytics'?50:undefined);
   let response: Response;
   try { response = await fetch(url, { ...init, signal: AbortSignal.timeout(30_000), redirect: 'error' }); }
   catch { throw new SyncDeferred(Date.now() + Math.max(60_000,policy.interval), 'network'); }
@@ -144,17 +182,18 @@ async function pageFetch(job: Job, connection: MarketplaceConnection, url: strin
     throw new SyncDeferred(saved.rows[0].next_allowed_at.getTime(), 'provider');
   }
   if (!response.ok) {
+    const responseText=await response.text();
+    const reason=response.status===403 && /premium|подписк/i.test(responseText.slice(0,4096))?'subscription':'other';
     if (response.status >= 400 && response.status < 500) {
       const multiplier = new URL(url).hostname.endsWith('.wildberries.ru') ? 10 : 1;
       await pool.query("UPDATE marketplace_sync_budgets SET next_allowed_at=GREATEST(next_allowed_at,now()+$2*interval '1 millisecond') WHERE id=$1", [budget, policy.interval * multiplier]);
       // A bad request/auth failure is terminal for this exact request/revision.
       // Keep other sources refreshing without replaying the failed HTTP call.
-      await pool.query(`INSERT INTO marketplace_sync_pages(id,connection_id,revision,payload,status,expires_at) VALUES($1,$2,$3,'{}',$4,'9999-01-01')
-        ON CONFLICT(id) DO UPDATE SET status=EXCLUDED.status,payload='{}',expires_at=EXCLUDED.expires_at`, [pageId,connection.id,job.revision,response.status]);
+      await pool.query(`INSERT INTO marketplace_sync_pages(id,connection_id,revision,payload,status,expires_at) VALUES($1,$2,$3,$5,$4,$6)
+        ON CONFLICT(id) DO UPDATE SET status=EXCLUDED.status,payload=EXCLUDED.payload,expires_at=EXCLUDED.expires_at`, [pageId,connection.id,job.revision,response.status,JSON.stringify({reason}),reason==='subscription'?new Date(Date.now()+6*3600_000):new Date('9999-01-01')]);
     }
-    await response.body?.cancel();
     // Provider bodies can contain identifiers or credentials; never persist/log them.
-    throw new SyncRejected(response.status);
+    throw new SyncRejected(response.status,reason);
   }
   if (response.headers.get('X-Ratelimit-Remaining') === '0') {
     const retryAt = retryAtFromHeaders(response.headers, Date.now(), policy.interval);
@@ -208,13 +247,14 @@ export async function workOne(handlers: Handlers): Promise<boolean> {
       await pool.query('UPDATE marketplace_connections SET last_sync_at=GREATEST(last_sync_at,$2) WHERE id=$1', [connection.id,sourceAt]);
     }
   } catch (error) {
-    const deferred = error instanceof SyncDeferred || context.deferredUntil.length > 0;
+    const subscription=error instanceof SyncRejected && error.reason==='subscription';
+    const deferred = error instanceof SyncDeferred || context.deferredUntil.length > 0 || subscription;
     const failures = error instanceof SyncDeferred && error.reason === 'budget' ? job.failures : job.failures + 1;
-    const retryAt = error instanceof SyncDeferred ? error.retryAt : context.deferredUntil.length ? Math.min(...context.deferredUntil) : Date.now() + 3600_000;
+    const retryAt = subscription ? Date.now()+6*3600_000 : error instanceof SyncDeferred ? error.retryAt : context.deferredUntil.length ? Math.min(...context.deferredUntil) : Date.now() + 3600_000;
     console.warn('Marketplace dataset deferred or blocked', { connectionId: job.connection_id, kind: job.kind, deferred, failures });
     await pool.query(`UPDATE marketplace_sync_jobs SET state=$3,next_attempt_at=$4,lease_until=NULL,lease_token=NULL,failures=$5,last_error=$6 WHERE id=$1 AND lease_token=$2`,
       [job.id, token, deferred ? 'waiting' : 'blocked', new Date(Math.max(retryAt, failures > 8 ? Date.now() + 24 * 3600_000 : 0)), failures,
-        deferred ? 'Ожидание доступного интервала площадки.' : error instanceof SyncRejected ? error.message : error instanceof Error && /^(Ozon|ВБ):/.test(error.message) ? error.message : 'Не удалось обработать ответ площадки.']);
+        subscription ? error.message : deferred ? 'Ожидание доступного интервала площадки.' : error instanceof SyncRejected ? error.message : error instanceof Error && /^(Ozon|ВБ):/.test(error.message) ? error.message : 'Не удалось обработать ответ площадки.']);
   } finally { clearInterval(heartbeat); }
   return true;
 }

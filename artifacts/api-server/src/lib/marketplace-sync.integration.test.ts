@@ -20,7 +20,7 @@ test('PostgreSQL queue survives restart, shares pages, honours 429 and credentia
   t.mock.method(globalThis, 'fetch', async () => { calls++; return new Response(JSON.stringify({ value: 7 })); });
   const handlers = {
     snapshot: async () => ({ daily: new Map([['day', await (await providerFetch('https://statistics-api.wildberries.ru/api/v1/supplier/sales?dateFrom=fixture', {})).json()]]) }),
-    finance: async () => ({ value: 1 }), catalog: async () => [],
+    finance: async () => ({ value: 1 }), catalog: async () => [], buyouts:async()=>({daily:new Map()}),
   };
   try {
     await assert.rejects(sharedDataset(connection, 'snapshot', { from: 'a', to: 'b' }), SyncDeferred);
@@ -77,5 +77,35 @@ test('PostgreSQL queue survives restart, shares pages, honours 429 and credentia
     assert.equal(terminalCalls,2);
     assert.equal((await sharedDataset(connection,'snapshot',{from:'terminal',to:'terminal'})).sync.state,'ready');
     assert.equal((await pool.query("SELECT 1 FROM marketplace_sync_pages WHERE payload LIKE '%secret must not be stored%'")).rowCount,0);
+    // Subscription can be enabled without rotating the seller key. Retry the
+    // subscription gate after its bounded cache interval, not every UI poll.
+    await pool.query('TRUNCATE marketplace_sync_jobs,marketplace_sync_pages,marketplace_sync_budgets');
+    const ozonCipher=encryptCredentials({clientId:'fixture-ozon',apiKey:'fixture'});
+    await pool.query("UPDATE marketplace_connections SET marketplace='ozon',credentials_ciphertext=$2 WHERE id=$1",[connection.id,ozonCipher]);
+    const ozon={...connection,marketplace:'ozon',credentialsCiphertext:ozonCipher};
+    const {getOzonBuyouts}=await import('./ozon-buyouts.ts');
+    const subscriptionHandlers={...handlers,buyouts:()=>getOzonBuyouts({clientId:'fixture-ozon',apiKey:'fixture'},'2026-11-20','2026-11-20')};
+    t.mock.method(globalThis,'fetch',async()=>new Response('Premium Plus required; private provider body',{status:403}));
+    await sharedDataset(ozon,'buyouts',{from:'2026-11-20',to:'2026-11-20'}).catch(()=>{});
+    await workOne(subscriptionHandlers);
+    const {SyncRejected}=await import('./sync-context.ts');
+    await assert.rejects(sharedDataset(ozon,'buyouts',{from:'2026-11-20',to:'2026-11-20'}),(error:unknown)=>error instanceof SyncRejected && error.reason==='subscription');
+    assert.ok((await pool.query("SELECT 1 FROM marketplace_sync_jobs WHERE state='waiting' AND next_attempt_at>now()+interval '5 hours'")).rowCount);
+    await pool.query("UPDATE marketplace_sync_pages SET expires_at=now()-interval '1 minute'; UPDATE marketplace_sync_jobs SET next_attempt_at=now(); UPDATE marketplace_sync_budgets SET next_allowed_at=now()-interval '1 minute'");
+    t.mock.method(globalThis,'fetch',async()=>new Response('{"rows":[{"delivery_commission":{"quantity":2,"amount":300}}]}'));
+    await workOne(subscriptionHandlers);
+    const unlocked=await sharedDataset<{daily:Map<string,{units:number}>}>(ozon,'buyouts',{from:'2026-11-20',to:'2026-11-20'});
+    assert.equal(unlocked.daily.get('2026-11-20')?.units,2);
+    // All analytics dimensions share the durable non-Premium 50/day budget.
+    let analyticsCalls=0;
+    t.mock.method(globalThis,'fetch',async()=>{analyticsCalls++;return new Response('{}');});
+    const quotaHandlers={...subscriptionHandlers,snapshot:async()=>{
+      await providerFetch('https://api-seller.ozon.ru/v1/analytics/data',{method:'POST',body:JSON.stringify({case:analyticsCalls?'second':'first'})});
+      return {daily:new Map()};
+    }};
+    await sharedDataset(ozon,'snapshot',{from:'quota-1',to:'quota-1'}).catch(()=>{});await workOne(quotaHandlers);
+    await pool.query("UPDATE marketplace_sync_budgets SET request_count=50,request_day=to_char(now() AT TIME ZONE 'UTC','YYYY-MM-DD'),next_allowed_at=now()-interval '1 minute' WHERE request_count>0");
+    await sharedDataset(ozon,'snapshot',{from:'quota-2',to:'quota-2'}).catch(()=>{});await workOne(quotaHandlers);
+    assert.equal(analyticsCalls,1);
   } finally { await pool.end(); }
 });

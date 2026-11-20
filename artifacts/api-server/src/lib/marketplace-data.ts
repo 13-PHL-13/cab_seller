@@ -10,12 +10,14 @@ type DailyPoint = {
   units: number;
   views: number;
   cartAdds: number;
+  boughtUnits?: number | null;
+  boughtAmount?: number | null;
 };
 
 export type MarketplaceSnapshot = {
   daily: Map<string, DailyPoint>;
   funnel: Omit<DailyPoint, "date" | "revenue">;
-  unavailable?: { sales?: string; funnel?: string; views?: string; carts?: string; orders?: string; revenue?: string };
+  unavailable?: { sales?: string; funnel?: string; views?: string; carts?: string; orders?: string; revenue?: string; buyouts?: string };
 };
 
 export class MarketplaceRateLimitError extends Error {
@@ -134,6 +136,7 @@ async function requestOzon(
   credentials: OzonCredentials,
   from: string,
   to: string,
+  extended=true,
 ): Promise<Record<string, unknown>> {
   return requestJson("https://api-seller.ozon.ru/v1/analytics/data", {
     method: "POST",
@@ -146,7 +149,7 @@ async function requestOzon(
       date_from: from,
       date_to: to,
       dimension: ["day"],
-      metrics: ["revenue", "ordered_units", "session_view", "hits_tocart"],
+      metrics: extended ? ["revenue", "ordered_units", "session_view_pdp", "hits_tocart"] : ["revenue","ordered_units"],
       filters: [],
       limit: 1000,
       offset: 0,
@@ -169,7 +172,12 @@ export async function getOzonSnapshot(
   from: string,
   to: string,
 ): Promise<MarketplaceSnapshot> {
-  const response = await requestOzon(credentials, from, to);
+  let response:Record<string,unknown>;
+  try{response=await requestOzon(credentials,from,to);}
+  catch(error){
+    if(error instanceof SyncRejected && error.status===403)response=await requestOzon(credentials,from,to,false);
+    else throw error;
+  }
   const snapshot = emptySnapshot();
 
   for (const rawRow of getOzonRows(response)) {
@@ -186,7 +194,7 @@ export async function getOzonSnapshot(
       const value=metrics[index];
       if(value===undefined || value===null || value==='' || !Number.isFinite(Number(value))) {
         snapshot.unavailable??={};
-        snapshot.unavailable[field]=`Ozon не передал показатель «${labels[index]}».`;
+        snapshot.unavailable[field]=`Ozon не передал показатель «${labels[index]}»${index>=2 ? ': расширенная аналитика API требует Premium Plus или Premium Pro' : ''}.`;
       }
     });
     const point: DailyPoint = {
