@@ -126,7 +126,8 @@ function CoverageNotice({stores,window,metrics,previous}:{stores:MarketplaceStor
   const missing=stores.filter(store=>metrics.some(key=>metricCoverage(stores,window,key,true).excluded.some(s=>s.id===store.id)));
   const changed=previous && metrics.some(key=>metricCoverage(stores,window,key,true).included.map(s=>s.id).sort().join(',')!==metricCoverage(stores,previous,key,true).included.map(s=>s.id).sort().join(','));
   if(!missing.length && !changed)return null;
-  return <p className="dashboard-coverage" role="note">{missing.length ? `Нет данных: ${missing.map(s=>`${platformName(s.marketplace)} · ${s.storeName}`).join(', ')}. График и итог — по доступным данным.` : ''}{changed ? ' Сравнение недоступно: состав данных за периоды различается.' : ''}</p>;
+  const names=missing.map(s=>`${platformName(s.marketplace)} · ${s.storeName}`).join(', ');
+  return <p className="dashboard-coverage" role="note" title={changed ? 'Сравнение скрыто: за периоды доступен разный состав магазинов.' : undefined}>{missing.length ? metrics.length>1 ? `Часть показателей недоступна: ${names}. Итог по доступным данным.` : `Итог без данных: ${names}.` : 'Сравнение периодов недоступно.'}</p>;
 }
 function sumMetric(
   stores: MarketplaceStore[],
@@ -978,11 +979,7 @@ export default function DashboardPage() {
         {loading && (
           <p role="status">Загружаем данные подключённых магазинов…</p>
         )}
-        {errors.map((error) => (
-          <p className="dashboard-warning" role="status" key={error}>
-            {error}
-          </p>
-        ))}
+        {errors.length>0 && <details className="dashboard-source-status"><summary>Не все данные доступны · Подробнее</summary>{errors.map(error=><p key={error}>{error}</p>)}</details>}
       </header>
       {!loading && !stores.length && (
         <div className="acc-empty">
