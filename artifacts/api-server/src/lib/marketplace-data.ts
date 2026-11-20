@@ -175,7 +175,7 @@ export async function getOzonSnapshot(
   let response:Record<string,unknown>;
   try{response=await requestOzon(credentials,from,to);}
   catch(error){
-    if(error instanceof SyncRejected && error.status===403)response=await requestOzon(credentials,from,to,false);
+    if(error instanceof SyncRejected && (error.status===403 || error.reason==='subscription'))response=await requestOzon(credentials,from,to,false);
     else throw error;
   }
   const snapshot = emptySnapshot();

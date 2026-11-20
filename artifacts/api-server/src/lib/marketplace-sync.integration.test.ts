@@ -85,7 +85,7 @@ test('PostgreSQL queue survives restart, shares pages, honours 429 and credentia
     const ozon={...connection,marketplace:'ozon',credentialsCiphertext:ozonCipher};
     const {getOzonBuyouts}=await import('./ozon-buyouts.ts');
     const subscriptionHandlers={...handlers,buyouts:()=>getOzonBuyouts({clientId:'fixture-ozon',apiKey:'fixture'},'2026-11-20','2026-11-20')};
-    t.mock.method(globalThis,'fetch',async()=>new Response('Premium Plus required; private provider body',{status:403}));
+    t.mock.method(globalThis,'fetch',async()=>new Response('subscription required; private provider body',{status:403}));
     await sharedDataset(ozon,'buyouts',{from:'2026-11-20',to:'2026-11-20'}).catch(()=>{});
     await workOne(subscriptionHandlers);
     const {SyncRejected}=await import('./sync-context.ts');

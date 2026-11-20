@@ -183,7 +183,7 @@ async function pageFetch(job: Job, connection: MarketplaceConnection, url: strin
   }
   if (!response.ok) {
     const responseText=await response.text();
-    const reason=response.status===403 && /premium|подписк/i.test(responseText.slice(0,4096))?'subscription':'other';
+    const reason=new URL(url).hostname==='api-seller.ozon.ru' && [400,403].includes(response.status) && /premium|subscription|подписк/i.test(responseText.slice(0,4096))?'subscription':'other';
     if (response.status >= 400 && response.status < 500) {
       const multiplier = new URL(url).hostname.endsWith('.wildberries.ru') ? 10 : 1;
       await pool.query("UPDATE marketplace_sync_budgets SET next_allowed_at=GREATEST(next_allowed_at,now()+$2*interval '1 millisecond') WHERE id=$1", [budget, policy.interval * multiplier]);
